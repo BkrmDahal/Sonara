@@ -6,6 +6,9 @@
 let currentBookmarks = [];
 let allTags = [];
 let currentBookmark = null;
+let pendingDeleteBookmarkId = null;
+let originalMarkdown = null;
+let isEditMode = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -61,6 +64,21 @@ function setupEventListeners() {
   document.getElementById('fullscreenSaveHighlightBtn').addEventListener('click', saveHighlightDirectFullscreen);
   document.getElementById('fullscreenCancelHighlightBtn').addEventListener('click', cancelHighlightFullscreen);
   
+  // Article editing
+  document.getElementById('editArticleBtn').addEventListener('click', handleEditArticle);
+  document.getElementById('saveAndRegenerateBtn').addEventListener('click', handleSaveAndRegenerate);
+  document.getElementById('cancelEditBtn').addEventListener('click', handleCancelEdit);
+  
+  // Delete confirmation modal
+  document.getElementById('closeDeleteConfirmModal').addEventListener('click', closeDeleteConfirmModal);
+  document.getElementById('cancelDeleteBtn').addEventListener('click', closeDeleteConfirmModal);
+  document.getElementById('confirmDeleteBtn').addEventListener('click', handleConfirmDelete);
+  
+  // Close delete modal on outside click
+  document.getElementById('deleteConfirmModal').addEventListener('click', (e) => {
+    if (e.target.id === 'deleteConfirmModal') closeDeleteConfirmModal();
+  });
+  
   // Close fullscreen modal on outside click
   document.getElementById('fullscreenArticleModal').addEventListener('click', (e) => {
     if (e.target.id === 'fullscreenArticleModal') closeFullscreenArticle();
@@ -91,8 +109,18 @@ function setupEventListeners() {
   });
   
   document.getElementById('downloadAudioBtn').addEventListener('click', handleDownloadAudio);
+  document.getElementById('reprocessAudioBtn').addEventListener('click', handleReprocessAudio);
   document.getElementById('sendToArchiveBtn').addEventListener('click', handleSendToArchive);
   document.getElementById('retryAudioBtn').addEventListener('click', handleRetryAudio);
+  document.getElementById('cancelAudioGenerationBtn').addEventListener('click', handleCancelAudioGeneration);
+  document.getElementById('viewJobLogsBtn').addEventListener('click', openJobLogsModal);
+  document.getElementById('closeJobLogsModal').addEventListener('click', closeJobLogsModal);
+  document.getElementById('jobLogsFilter').addEventListener('change', handleJobLogsFilter);
+  
+  // Close job logs modal on outside click
+  document.getElementById('jobLogsModal').addEventListener('click', (e) => {
+    if (e.target.id === 'jobLogsModal') closeJobLogsModal();
+  });
   
   // Highlights
   document.getElementById('highlightsBtn').addEventListener('click', openHighlightsModal);
@@ -100,9 +128,42 @@ function setupEventListeners() {
   document.getElementById('saveHighlightDirectBtn').addEventListener('click', saveHighlightDirect);
   document.getElementById('cancelHighlightBtn').addEventListener('click', cancelHighlight);
   
-  // Close modals on outside click
+  // Close modals on outside click and handle button clicks
   document.getElementById('highlightsModal').addEventListener('click', (e) => {
-    if (e.target.id === 'highlightsModal') closeHighlightsModal();
+    if (e.target.id === 'highlightsModal') {
+      closeHighlightsModal();
+      return;
+    }
+    
+    // Handle button clicks (View in Sonara and Delete)
+    let target = e.target;
+    if (target.tagName !== 'BUTTON') {
+      target = target.closest('button');
+    }
+    
+    if (target) {
+      // Handle "View in Sonara" button
+      if (target.getAttribute('data-action') === 'view-in-sonara') {
+        e.preventDefault();
+        e.stopPropagation();
+        const bookmarkId = target.getAttribute('data-bookmark-id');
+        if (bookmarkId) {
+          openArticleFromHighlight(bookmarkId);
+        }
+        return;
+      }
+      
+      // Handle Delete button
+      if (target.classList.contains('btn-delete') && target.hasAttribute('data-highlight-id')) {
+        e.preventDefault();
+        e.stopPropagation();
+        const highlightId = target.getAttribute('data-highlight-id');
+        if (highlightId) {
+          deleteHighlight(highlightId);
+        }
+        return;
+      }
+    }
   });
   
   // Audio player
@@ -152,13 +213,14 @@ function setupEventListeners() {
     let target = e.target;
     
     // If clicked on text node or emoji, find the button parent
-    if (target.tagName !== 'BUTTON') {
+    if (target && target.tagName !== 'BUTTON') {
       target = target.closest('button');
     }
     
     if (target) {
       const action = target.getAttribute('data-action');
       const bookmarkId = target.getAttribute('data-bookmark-id');
+      
       if (action === 'listen' && bookmarkId) {
         e.preventDefault();
         e.stopPropagation();
@@ -545,7 +607,8 @@ async function handleArchiveFilter() {
 async function handleListen(bookmarkId) {
   try {
     const allBookmarks = await storageManager.getBookmarks();
-    let bookmark = allBookmarks.find(b => b.id === bookmarkId);
+    // Handle both string and number IDs
+    let bookmark = allBookmarks.find(b => b.id === bookmarkId || String(b.id) === String(bookmarkId));
     
     if (!bookmark) {
       alert('Bookmark not found');
@@ -568,19 +631,29 @@ async function handleListen(bookmarkId) {
     // Show TTS modal
     // Convert HTML to markdown, then render as HTML for better readability
     const articleContentEl = document.getElementById('articleContent');
+    let markdown = '';
+    
     if (bookmark.isCustomAudio) {
-      // For custom audio, render the text as markdown
-      const renderedHtml = renderMarkdown(bookmark.extractedContent);
-      articleContentEl.innerHTML = renderedHtml || bookmark.extractedContent;
+      // For custom audio, use the text directly as markdown
+      markdown = bookmark.extractedContent;
+      const renderedHtml = renderMarkdown(markdown);
+      articleContentEl.innerHTML = renderedHtml || markdown;
     } else if (bookmark.html && bookmark.html.trim()) {
-      const markdown = htmlToMarkdown(bookmark.html);
+      markdown = htmlToMarkdown(bookmark.html);
       const renderedHtml = renderMarkdown(markdown);
       articleContentEl.innerHTML = renderedHtml || bookmark.extractedContent;
     } else {
-      // If no HTML, try to render the plain text as markdown
-      const renderedHtml = renderMarkdown(bookmark.extractedContent);
-      articleContentEl.innerHTML = renderedHtml || bookmark.extractedContent;
+      // If no HTML, use extractedContent as markdown
+      markdown = bookmark.extractedContent || '';
+      const renderedHtml = renderMarkdown(markdown);
+      articleContentEl.innerHTML = renderedHtml || markdown;
     }
+    
+    // Store original markdown for editing
+    originalMarkdown = markdown;
+    isEditMode = false;
+    articleContentEl.contentEditable = 'false';
+    document.getElementById('editArticleToolbar').style.display = 'none';
     
     // Load and display highlights for this article
     await loadHighlightsForArticle(bookmarkId, articleContentEl);
@@ -676,6 +749,17 @@ async function handleListen(bookmarkId) {
       errorEl.style.display = 'none';
       ttsEl.style.display = 'none';
       bookmark.audioUrl = audioUrl;
+      
+      // Auto-play if setting is enabled
+      const settings = await storageManager.getSettings();
+      if (settings.autoPlayAudio) {
+        audioPlayer.addEventListener('loadeddata', () => {
+          audioPlayer.play().catch(err => {
+            console.log('Auto-play prevented by browser:', err);
+            // Auto-play was prevented (browser policy), user will need to click play
+          });
+        }, { once: true });
+      }
       
       // Show bottom audio player when audio starts playing
       audioPlayer.addEventListener('play', () => {
@@ -850,8 +934,10 @@ async function loadSettingsIntoUI() {
   const settings = await storageManager.getSettings();
   const keyInput = document.getElementById('openaiApiKey');
   const voiceSelect = document.getElementById('openaiVoiceSelect');
+  const autoPlayCheckbox = document.getElementById('autoPlayAudio');
   if (keyInput) keyInput.value = settings.openaiApiKey || '';
   if (voiceSelect) voiceSelect.value = settings.openaiVoice || 'coral';
+  if (autoPlayCheckbox) autoPlayCheckbox.checked = settings.autoPlayAudio || false;
   
   const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
   const voices = ['alloy','ash','ballad','coral','echo','fable','nova','onyx','sage','shimmer','verse','marin','cedar'];
@@ -874,7 +960,8 @@ function closeSettingsModal() {
 async function handleSaveSettings() {
   const apiKey = document.getElementById('openaiApiKey').value.trim();
   const voice = document.getElementById('openaiVoiceSelect').value;
-  await storageManager.saveSettings({ openaiApiKey: apiKey, openaiVoice: voice });
+  const autoPlayAudio = document.getElementById('autoPlayAudio').checked;
+  await storageManager.saveSettings({ openaiApiKey: apiKey, openaiVoice: voice, autoPlayAudio: autoPlayAudio });
   closeSettingsModal();
 }
 
@@ -946,28 +1033,86 @@ async function handleRemoveTag(bookmarkId, tagToRemove) {
   await loadTags();
 }
 
-// Handle delete
+// Handle delete - shows confirmation modal
 async function handleDelete(bookmarkId) {
-  const confirmed = window.confirm('Are you sure you want to delete this bookmark?');
-  if (!confirmed) return;
+  if (!bookmarkId) {
+    alert('Error: No bookmark ID provided');
+    return;
+  }
+  
+  // Get bookmark details for confirmation message
+  let bookmarkTitle = 'this article';
+  try {
+    const allBookmarks = await storageManager.getBookmarks();
+    const bookmark = allBookmarks.find(b => b.id === bookmarkId || String(b.id) === String(bookmarkId));
+    if (bookmark) {
+      bookmarkTitle = bookmark.title || 'this article';
+    }
+  } catch (err) {
+    // Continue with generic title if fetch fails
+  }
+  
+  // Store the bookmark ID for deletion
+  pendingDeleteBookmarkId = bookmarkId;
+  
+  // Show confirmation modal
+  const messageEl = document.getElementById('deleteConfirmMessage');
+  messageEl.textContent = `Are you sure you want to delete "${bookmarkTitle}"?`;
+  document.getElementById('deleteConfirmModal').classList.add('active');
+}
+
+// Handle confirmed delete
+async function handleConfirmDelete() {
+  const bookmarkId = pendingDeleteBookmarkId;
+  
+  if (!bookmarkId) {
+    closeDeleteConfirmModal();
+    return;
+  }
+  
+  closeDeleteConfirmModal();
   
   try {
+    // Delete associated highlights first
+    try {
+      await highlightsManager.deleteHighlightsForBookmark(bookmarkId);
+    } catch (highlightsError) {
+      // Continue with bookmark deletion even if highlights deletion fails
+    }
+    
     // Delete audio from IndexedDB if it exists
     try {
       await audioStorageManager.deleteAudio(bookmarkId);
     } catch (audioError) {
-      console.warn('Error deleting audio from IndexedDB (may not exist):', audioError);
       // Continue with bookmark deletion even if audio deletion fails
     }
     
+    // Delete the bookmark
     await storageManager.deleteBookmark(bookmarkId);
+    
+    // Reload bookmarks and tags
     await loadBookmarks();
-    // Also reload tags in case this was the last bookmark with a tag
     await loadTags();
+    
+    // If the deleted bookmark was currently being viewed, close the modal
+    if (window.currentTTSBookmark && (window.currentTTSBookmark.id === bookmarkId || String(window.currentTTSBookmark.id) === String(bookmarkId))) {
+      closeTTSModal();
+      window.currentTTSBookmark = null;
+    }
+    
+    // Clear pending delete
+    pendingDeleteBookmarkId = null;
+    
   } catch (error) {
-    console.error('Error deleting bookmark:', error);
     alert('Error deleting bookmark: ' + error.message);
+    pendingDeleteBookmarkId = null;
   }
+}
+
+// Close delete confirmation modal
+function closeDeleteConfirmModal() {
+  document.getElementById('deleteConfirmModal').classList.remove('active');
+  pendingDeleteBookmarkId = null;
 }
 
 // Send to archive (from Listen modal)
@@ -985,6 +1130,156 @@ async function handleSendToArchive() {
   } catch (e) {
     console.error('Archive failed:', e);
     alert('Failed to archive: ' + e.message);
+  }
+}
+
+// Handle reprocess audio (regenerate existing audio)
+async function handleReprocessAudio() {
+  if (!window.currentTTSBookmark) return;
+  
+  const bookmarkId = window.currentTTSBookmark.id;
+  const allBookmarks = await storageManager.getBookmarks();
+  const bookmark = allBookmarks.find(b => b.id === bookmarkId);
+  
+  if (!bookmark) {
+    alert('Bookmark not found');
+    return;
+  }
+  
+  if (!bookmark.extractedContent || bookmark.extractedContent.trim() === '') {
+    alert('No article content available for audio generation.');
+    return;
+  }
+  
+  const settings = await storageManager.getSettings();
+  if (!settings.openaiApiKey || !settings.openaiApiKey.trim()) {
+    alert('OpenAI API key is required. Please configure it in Settings.');
+    return;
+  }
+  
+  // Delete existing audio from IndexedDB
+  try {
+    await audioStorageManager.deleteAudio(bookmarkId);
+  } catch (err) {
+    // Continue even if deletion fails
+  }
+  
+  // Update status to generating and clear audio data
+  bookmark.audioStatus = 'generating';
+  delete bookmark.audioError;
+  delete bookmark.audioStored;
+  delete bookmark.audioData;
+  delete bookmark.audioMimeType;
+  delete bookmark.audioDuration;
+  delete bookmark.audioUrl;
+  
+  // Save the updated bookmark
+  const savedBookmark = await storageManager.saveBookmark(bookmark);
+  
+  // Update current bookmark reference
+  window.currentTTSBookmark = savedBookmark;
+  
+  // Update UI to show generating state
+  const playerEl = document.getElementById('audioPlayerContainer');
+  const generatingEl = document.getElementById('audioGeneratingMsg');
+  const errorEl = document.getElementById('audioErrorMsg');
+  const ttsEl = document.getElementById('ttsControls');
+  
+  playerEl.style.display = 'none';
+  generatingEl.style.display = 'flex';
+  errorEl.style.display = 'none';
+  ttsEl.style.display = 'none';
+  
+  // Clear audio player source
+  const audioPlayer = document.getElementById('audioPlayer');
+  if (audioPlayer && audioPlayer.src) {
+    URL.revokeObjectURL(audioPlayer.src);
+    audioPlayer.src = '';
+  }
+  
+  // Reload bookmarks to update the list
+  await loadBookmarks();
+  
+  // Trigger audio generation - send message to background script
+  try {
+    chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('Error sending message:', chrome.runtime.lastError);
+        // Handle error
+        handleReprocessError(bookmarkId, chrome.runtime.lastError.message);
+      } else if (response && !response.ok) {
+        console.error('Generation failed:', response.error);
+        handleReprocessError(bookmarkId, response.error || 'Failed to start audio generation');
+      }
+    });
+  } catch (err) {
+    console.error('Failed to send audio generation message:', err);
+    handleReprocessError(bookmarkId, err.message);
+  }
+}
+
+// Helper function to handle reprocess errors
+async function handleReprocessError(bookmarkId, errorMessage) {
+  const updatedBookmarks = await storageManager.getBookmarks();
+  const updatedBookmark = updatedBookmarks.find(b => b.id === bookmarkId);
+  if (updatedBookmark) {
+    updatedBookmark.audioStatus = 'error';
+    updatedBookmark.audioError = 'Failed to start generation: ' + errorMessage;
+    await storageManager.saveBookmark(updatedBookmark);
+    await loadBookmarks();
+    
+    // Update UI to show error
+    const playerEl = document.getElementById('audioPlayerContainer');
+    const generatingEl = document.getElementById('audioGeneratingMsg');
+    const errorEl = document.getElementById('audioErrorMsg');
+    const ttsEl = document.getElementById('ttsControls');
+    
+    playerEl.style.display = 'none';
+    generatingEl.style.display = 'none';
+    errorEl.style.display = 'flex';
+    ttsEl.style.display = 'flex';
+    document.getElementById('audioErrorText').textContent = updatedBookmark.audioError;
+    window.currentTTSBookmark = updatedBookmark;
+  }
+}
+
+// Handle cancel audio generation
+async function handleCancelAudioGeneration() {
+  if (!window.currentTTSBookmark) return;
+  
+  const bookmarkId = window.currentTTSBookmark.id;
+  
+  // Send cancel message to background
+  try {
+    await chrome.runtime.sendMessage({ type: 'CANCEL_AUDIO_GENERATION', bookmarkId });
+  } catch (err) {
+    console.error('Failed to send cancel message:', err);
+  }
+  
+  // Update bookmark status
+  const allBookmarks = await storageManager.getBookmarks();
+  const bookmark = allBookmarks.find(b => b.id === bookmarkId);
+  if (bookmark) {
+    delete bookmark.audioStatus;
+    delete bookmark.audioError;
+    await storageManager.saveBookmark(bookmark);
+    await loadBookmarks();
+  }
+  
+  // Update UI - show TTS controls instead of generating message
+  const playerEl = document.getElementById('audioPlayerContainer');
+  const generatingEl = document.getElementById('audioGeneratingMsg');
+  const errorEl = document.getElementById('audioErrorMsg');
+  const ttsEl = document.getElementById('ttsControls');
+  
+  playerEl.style.display = 'none';
+  generatingEl.style.display = 'none';
+  errorEl.style.display = 'none';
+  ttsEl.style.display = 'flex';
+  
+  // Update current bookmark reference
+  if (bookmark) {
+    window.currentTTSBookmark = bookmark;
   }
 }
 
@@ -1100,6 +1395,17 @@ async function refreshListenModalIfOpen(bookmarkId) {
       updateBottomAudioPlayerInfo(b);
     }
     
+    // Auto-play if setting is enabled
+    const settings = await storageManager.getSettings();
+    if (settings.autoPlayAudio) {
+      audioPlayer.addEventListener('loadeddata', () => {
+        audioPlayer.play().catch(err => {
+          console.log('Auto-play prevented by browser:', err);
+          // Auto-play was prevented (browser policy), user will need to click play
+        });
+      }, { once: true });
+    }
+    
     // Show bottom audio player when audio starts playing
     audioPlayer.addEventListener('play', () => {
       showBottomAudioPlayer();
@@ -1120,6 +1426,12 @@ async function refreshListenModalIfOpen(bookmarkId) {
 // Close TTS modal
 function closeTTSModal() {
   ttsEngine.stop();
+  
+  // Exit edit mode if active
+  if (isEditMode) {
+    handleCancelEdit();
+  }
+  
   document.getElementById('ttsModal').classList.remove('active');
   // Don't clear currentTTSBookmark if audio is still playing - keep bottom player visible
   const audioPlayer = document.getElementById('audioPlayer');
@@ -1130,6 +1442,8 @@ function closeTTSModal() {
     hideBottomAudioPlayer();
   }
   updateTTSControls();
+  originalMarkdown = null;
+  isEditMode = false;
 }
 
 // Handle download audio
@@ -2084,7 +2398,7 @@ async function openHighlightsModal() {
                 </svg>
                 Open Article
               </a>
-              <button class="btn btn-small highlight-view-sonara-btn" onclick="openArticleFromHighlight('${bookmarkId}')">
+              <button class="btn btn-small highlight-view-sonara-btn" data-action="view-in-sonara" data-bookmark-id="${bookmarkId}">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"></path>
                 </svg>
@@ -2100,7 +2414,7 @@ async function openHighlightsModal() {
                 </div>
                 <div class="highlight-meta">
                   <span class="highlight-date">${new Date(h.createdAt).toLocaleString()}</span>
-                  <button class="btn btn-small btn-delete" onclick="deleteHighlight(${h.id})">Delete</button>
+                  <button class="btn btn-small btn-delete" data-highlight-id="${h.id}">Delete</button>
                 </div>
               </div>
             `).join('')}
@@ -2127,6 +2441,10 @@ function closeHighlightsModal() {
  * Open article from highlight
  */
 async function openArticleFromHighlight(bookmarkId) {
+  if (!bookmarkId) {
+    return;
+  }
+  
   closeHighlightsModal();
   await handleListen(bookmarkId);
 }
@@ -2135,12 +2453,20 @@ async function openArticleFromHighlight(bookmarkId) {
  * Delete highlight
  */
 async function deleteHighlight(highlightId) {
-  if (!confirm('Are you sure you want to delete this highlight?')) {
+  if (!highlightId) {
     return;
   }
   
   try {
-    await highlightsManager.deleteHighlight(highlightId);
+    // Convert to number if it's a string (IndexedDB uses numeric IDs)
+    const id = typeof highlightId === 'string' ? parseInt(highlightId, 10) : highlightId;
+    
+    if (isNaN(id)) {
+      alert('Invalid highlight ID');
+      return;
+    }
+    
+    await highlightsManager.deleteHighlight(id);
     // Reload highlights view
     await openHighlightsModal();
   } catch (error) {
@@ -2488,3 +2814,358 @@ async function handleGenerateAudio() {
 // Make functions global for onclick handlers
 window.openArticleFromHighlight = openArticleFromHighlight;
 window.deleteHighlight = deleteHighlight;
+
+// ========== ARTICLE EDITING FUNCTIONALITY ==========
+
+/**
+ * Handle edit article button click
+ */
+function handleEditArticle() {
+  const articleContentEl = document.getElementById('articleContent');
+  const editToolbar = document.getElementById('editArticleToolbar');
+  const highlightToolbar = document.getElementById('highlightToolbar');
+  
+  if (!isEditMode) {
+    // Enter edit mode
+    isEditMode = true;
+    articleContentEl.contentEditable = 'true';
+    articleContentEl.style.border = '2px solid #3b82f6';
+    articleContentEl.style.padding = '15px';
+    articleContentEl.style.borderRadius = '8px';
+    articleContentEl.style.minHeight = '200px';
+    articleContentEl.style.outline = 'none';
+    editToolbar.style.display = 'flex';
+    highlightToolbar.style.display = 'none';
+    
+    // Update edit button appearance
+    const editBtn = document.getElementById('editArticleBtn');
+    editBtn.classList.add('active');
+    editBtn.title = 'Editing mode';
+  }
+}
+
+/**
+ * Handle cancel edit
+ */
+function handleCancelEdit() {
+  const articleContentEl = document.getElementById('articleContent');
+  const editToolbar = document.getElementById('editArticleToolbar');
+  
+  // Restore original content
+  if (originalMarkdown) {
+    const renderedHtml = renderMarkdown(originalMarkdown);
+    articleContentEl.innerHTML = renderedHtml;
+  }
+  
+  // Exit edit mode
+  isEditMode = false;
+  articleContentEl.contentEditable = 'false';
+  articleContentEl.style.border = '';
+  articleContentEl.style.padding = '';
+  articleContentEl.style.borderRadius = '';
+  articleContentEl.style.minHeight = '';
+  editToolbar.style.display = 'none';
+  
+  // Update edit button
+  const editBtn = document.getElementById('editArticleBtn');
+  editBtn.classList.remove('active');
+  editBtn.title = 'Edit article content';
+  
+  // Reload highlights
+  if (window.currentTTSBookmark) {
+    loadHighlightsForArticle(window.currentTTSBookmark.id, articleContentEl);
+    setupTextSelection(window.currentTTSBookmark.id, articleContentEl);
+  }
+}
+
+/**
+ * Handle save and regenerate audio
+ */
+async function handleSaveAndRegenerate() {
+  if (!window.currentTTSBookmark) {
+    alert('No bookmark found');
+    return;
+  }
+  
+  const articleContentEl = document.getElementById('articleContent');
+  const editedHtml = articleContentEl.innerHTML;
+  
+  // Convert edited HTML back to markdown
+  const editedMarkdown = htmlToMarkdown(editedHtml);
+  
+  if (!editedMarkdown || editedMarkdown.trim() === '') {
+    alert('Content cannot be empty');
+    return;
+  }
+  
+  try {
+    // Get updated bookmark
+    const allBookmarks = await storageManager.getBookmarks();
+    const bookmark = allBookmarks.find(b => 
+      b.id === window.currentTTSBookmark.id || String(b.id) === String(window.currentTTSBookmark.id)
+    );
+    
+    if (!bookmark) {
+      alert('Bookmark not found');
+      return;
+    }
+    
+    // Update bookmark with new markdown
+    bookmark.extractedContent = editedMarkdown;
+    // Also update HTML for consistency
+    bookmark.html = editedHtml;
+    
+    // Delete existing audio since content changed
+    try {
+      await audioStorageManager.deleteAudio(bookmark.id);
+    } catch (err) {
+      // Continue even if deletion fails
+    }
+    
+    // Clear audio status and data
+    delete bookmark.audioStatus;
+    delete bookmark.audioError;
+    delete bookmark.audioStored;
+    delete bookmark.audioData;
+    delete bookmark.audioMimeType;
+    delete bookmark.audioDuration;
+    delete bookmark.audioUrl;
+    
+    // Save updated bookmark
+    await storageManager.saveBookmark(bookmark);
+    
+    // Update current bookmark reference
+    window.currentTTSBookmark = bookmark;
+    originalMarkdown = editedMarkdown;
+    
+    // Exit edit mode
+    isEditMode = false;
+    articleContentEl.contentEditable = 'false';
+    articleContentEl.style.border = '';
+    articleContentEl.style.padding = '';
+    articleContentEl.style.borderRadius = '';
+    articleContentEl.style.minHeight = '';
+    document.getElementById('editArticleToolbar').style.display = 'none';
+    
+    // Update edit button
+    const editBtn = document.getElementById('editArticleBtn');
+    editBtn.classList.remove('active');
+    editBtn.title = 'Edit article content';
+    
+    // Reload bookmarks
+    await loadBookmarks();
+    
+    // Start audio generation
+    const settings = await storageManager.getSettings();
+    if (!settings.openaiApiKey || !settings.openaiApiKey.trim()) {
+      alert('OpenAI API key is required. Please configure it in Settings.');
+      return;
+    }
+    
+    // Set status to generating
+    bookmark.audioStatus = 'generating';
+    await storageManager.saveBookmark(bookmark);
+    
+    // Update UI to show generating state
+    const playerEl = document.getElementById('audioPlayerContainer');
+    const generatingEl = document.getElementById('audioGeneratingMsg');
+    const errorEl = document.getElementById('audioErrorMsg');
+    const ttsEl = document.getElementById('ttsControls');
+    
+    playerEl.style.display = 'none';
+    generatingEl.style.display = 'flex';
+    errorEl.style.display = 'none';
+    ttsEl.style.display = 'none';
+    
+    // Clear audio player
+    const audioPlayer = document.getElementById('audioPlayer');
+    if (audioPlayer && audioPlayer.src) {
+      URL.revokeObjectURL(audioPlayer.src);
+      audioPlayer.src = '';
+    }
+    
+    // Trigger audio generation
+    try {
+      chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId: bookmark.id }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error sending message:', chrome.runtime.lastError);
+          bookmark.audioStatus = 'error';
+          bookmark.audioError = 'Failed to start generation: ' + chrome.runtime.lastError.message;
+          storageManager.saveBookmark(bookmark);
+          loadBookmarks();
+        }
+      });
+    } catch (err) {
+      console.error('Failed to send audio generation message:', err);
+      bookmark.audioStatus = 'error';
+      bookmark.audioError = 'Failed to start generation: ' + err.message;
+      await storageManager.saveBookmark(bookmark);
+      await loadBookmarks();
+    }
+    
+    // Reload highlights with new content
+    await loadHighlightsForArticle(bookmark.id, articleContentEl);
+    setupTextSelection(bookmark.id, articleContentEl);
+    
+  } catch (error) {
+    console.error('Error saving and regenerating:', error);
+    alert('Error saving content: ' + error.message);
+  }
+}
+
+// ========== JOB LOGS FUNCTIONALITY ==========
+
+let allJobLogs = [];
+let filteredJobLogs = [];
+
+/**
+ * Open job logs modal
+ */
+async function openJobLogsModal() {
+  try {
+    allJobLogs = await storageManager.getJobLogs();
+    filteredJobLogs = allJobLogs;
+    
+    // Get unique bookmark titles for filter
+    const bookmarkTitles = [...new Set(allJobLogs.map(log => log.bookmarkTitle))].sort();
+    const filterSelect = document.getElementById('jobLogsFilter');
+    filterSelect.innerHTML = '<option value="">All Articles</option>' +
+      bookmarkTitles.map(title => 
+        `<option value="${escapeHtml(title)}">${escapeHtml(title)}</option>`
+      ).join('');
+    
+    renderJobLogs();
+    document.getElementById('jobLogsModal').classList.add('active');
+  } catch (error) {
+    console.error('Error opening job logs modal:', error);
+    alert('Failed to load job logs: ' + error.message);
+  }
+}
+
+/**
+ * Close job logs modal
+ */
+function closeJobLogsModal() {
+  document.getElementById('jobLogsModal').classList.remove('active');
+}
+
+/**
+ * Handle job logs filter
+ */
+function handleJobLogsFilter() {
+  const filterValue = document.getElementById('jobLogsFilter').value;
+  if (filterValue) {
+    filteredJobLogs = allJobLogs.filter(log => log.bookmarkTitle === filterValue);
+  } else {
+    filteredJobLogs = allJobLogs;
+  }
+  renderJobLogs();
+}
+
+/**
+ * Render job logs
+ */
+function renderJobLogs() {
+  const logsList = document.getElementById('jobLogsList');
+  
+  if (filteredJobLogs.length === 0) {
+    logsList.innerHTML = '<div class="empty-state"><p>No job logs found.</p></div>';
+    return;
+  }
+  
+  // Group logs by bookmark
+  const logsByBookmark = {};
+  filteredJobLogs.forEach(log => {
+    const key = log.bookmarkId;
+    if (!logsByBookmark[key]) {
+      logsByBookmark[key] = [];
+    }
+    logsByBookmark[key].push(log);
+  });
+  
+  logsList.innerHTML = Object.entries(logsByBookmark).map(([bookmarkId, logs]) => {
+    const firstLog = logs[0];
+    const latestLog = logs[logs.length - 1];
+    
+    return `
+      <div class="job-log-group" style="margin-bottom: 20px; padding: 15px; border: 1px solid #e5e7eb; border-radius: 8px;">
+        <div class="job-log-header" style="margin-bottom: 10px;">
+          <h3 style="margin: 0 0 5px 0; font-size: 16px; font-weight: 600;">${escapeHtml(firstLog.bookmarkTitle)}</h3>
+          <span style="font-size: 12px; color: #6b7280;">${logs.length} log${logs.length !== 1 ? 's' : ''}</span>
+        </div>
+        <div class="job-log-items">
+          ${logs.map(log => {
+            const statusColors = {
+              'started': '#3b82f6',
+              'progress': '#f59e0b',
+              'success': '#10b981',
+              'error': '#ef4444',
+              'cancelled': '#6b7280'
+            };
+            const statusColor = statusColors[log.status] || '#6b7280';
+            const time = new Date(log.timestamp).toLocaleString();
+            
+            return `
+              <div class="job-log-item" style="padding: 10px; margin: 5px 0; background: #f9fafb; border-radius: 6px; border-left: 3px solid ${statusColor};">
+                <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 5px;">
+                  <span style="font-weight: 500; color: ${statusColor}; text-transform: capitalize;">${log.status}</span>
+                  <span style="font-size: 11px; color: #6b7280;">${time}</span>
+                </div>
+                <div style="font-size: 13px; color: #374151;">${escapeHtml(log.message)}</div>
+                ${log.details && Object.keys(log.details).length > 0 ? `
+                  <div style="margin-top: 8px; font-size: 11px; color: #6b7280; line-height: 1.6;">
+                    ${(() => {
+                      const details = log.details;
+                      const chunksInfo = [];
+                      const otherInfo = [];
+                      
+                      // Prioritize chunk information
+                      if (details.totalChunks !== undefined) {
+                        chunksInfo.push(`<strong>Total Chunks:</strong> ${details.totalChunks}`);
+                      }
+                      if (details.completedChunks !== undefined) {
+                        chunksInfo.push(`<strong>Completed:</strong> ${details.completedChunks}`);
+                      }
+                      if (details.currentChunk !== undefined) {
+                        chunksInfo.push(`<strong>Current:</strong> ${details.currentChunk}`);
+                      }
+                      if (details.progressPercent !== undefined) {
+                        chunksInfo.push(`<strong>Progress:</strong> ${details.progressPercent}%`);
+                      }
+                      if (details.chunksProcessed !== undefined && details.chunksTotal !== undefined) {
+                        chunksInfo.push(`<strong>Chunks:</strong> ${details.chunksProcessed}/${details.chunksTotal}`);
+                      }
+                      
+                      // Other details
+                      Object.entries(details).forEach(([key, value]) => {
+                        if (key === 'stack' || 
+                            ['totalChunks', 'completedChunks', 'currentChunk', 'progressPercent', 
+                             'chunksProcessed', 'chunksTotal'].includes(key)) {
+                          return;
+                        }
+                        const displayKey = key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase());
+                        otherInfo.push(`<strong>${displayKey}:</strong> ${escapeHtml(String(value))}`);
+                      });
+                      
+                      let html = '';
+                      if (chunksInfo.length > 0) {
+                        html += `<div style="background: #eff6ff; padding: 8px; border-radius: 4px; margin-bottom: 5px;">
+                          <div style="font-weight: 600; margin-bottom: 4px; color: #1e40af;">Chunk Progress:</div>
+                          ${chunksInfo.join(' • ')}
+                        </div>`;
+                      }
+                      if (otherInfo.length > 0) {
+                        html += `<div>${otherInfo.join(' • ')}</div>`;
+                      }
+                      return html;
+                    })()}
+                  </div>
+                ` : ''}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+}

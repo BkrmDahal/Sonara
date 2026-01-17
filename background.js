@@ -11,6 +11,33 @@ const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
 const OPENAI_TTS_MODEL = 'gpt-4o-mini-tts';
 const MAX_CHARS_PER_REQUEST = 4096;
 
+// Helper function to save job logs
+async function saveJobLog(bookmarkId, bookmarkTitle, status, message, details = {}) {
+  try {
+    const data = await getData();
+    if (!data.jobLogs) {
+      data.jobLogs = [];
+    }
+    const log = {
+      bookmarkId,
+      bookmarkTitle: bookmarkTitle || 'Unknown',
+      status, // 'started', 'progress', 'success', 'error', 'cancelled'
+      message,
+      details,
+      timestamp: Date.now()
+    };
+    data.jobLogs.push(log);
+    // Keep only last 1000 logs
+    if (data.jobLogs.length > 1000) {
+      data.jobLogs = data.jobLogs.slice(-1000);
+    }
+    await setData(data);
+    return log;
+  } catch (err) {
+    console.error('Failed to save job log:', err);
+  }
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   // Extension installed
 });
@@ -83,7 +110,7 @@ async function fetchWithRetry(url, options, maxRetries = 3, baseDelay = 1000) {
   throw lastError || new Error('Request failed after retries');
 }
 
-async function openaiTTSInBackground(text, apiKey, voice = 'coral') {
+async function openaiTTSInBackground(text, apiKey, voice = 'coral', bookmarkId = null, progressCallback = null) {
   if (!text || !text.trim()) {
     throw new Error('Empty text provided');
   }
@@ -103,12 +130,66 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral') {
     remaining = remaining.substring(chunk.length).trim();
   }
 
-  console.log(`Generating audio for ${chunks.length} chunk(s), total length: ${text.length} characters`);
+  const totalChunks = chunks.length;
+  const totalChars = text.length;
+  console.log(`Generating audio for ${totalChunks} chunk(s), total length: ${totalChars} characters`);
+
+  // Call progress callback with initial info
+  if (progressCallback) {
+    await progressCallback({
+      totalChunks,
+      completedChunks: 0,
+      currentChunk: 0,
+      totalChars,
+      progressPercent: 0,
+      status: 'starting'
+    });
+  }
 
   const blobs = [];
+  let totalBytesReceived = 0;
+  
   for (let i = 0; i < chunks.length; i++) {
+    const chunkStartTime = Date.now();
+    const currentChunk = i + 1;
+    
+    // Check for cancellation if bookmarkId is provided
+    if (bookmarkId && activeGenerations.get(bookmarkId)?.cancelled) {
+      console.log(`Audio generation cancelled for bookmark ${bookmarkId} at chunk ${currentChunk}`);
+      activeGenerations.delete(bookmarkId);
+      if (progressCallback) {
+        await progressCallback({
+          totalChunks,
+          completedChunks: i,
+          currentChunk,
+          totalChars,
+          progressPercent: Math.round((i / totalChunks) * 100),
+          status: 'cancelled',
+          cancelledAt: currentChunk
+        });
+      }
+      throw new Error('Audio generation cancelled by user');
+    }
+    
     try {
-      console.log(`Processing chunk ${i + 1}/${chunks.length} (${chunks[i].length} chars)...`);
+      const chunkChars = chunks[i].length;
+      const progressPercent = Math.round((i / totalChunks) * 100);
+      
+      console.log(`Processing chunk ${currentChunk}/${totalChunks} (${chunkChars} chars, ${progressPercent}% complete)...`);
+      
+      // Log chunk start
+      if (progressCallback) {
+        await progressCallback({
+          totalChunks,
+          completedChunks: i,
+          currentChunk,
+          currentChunkChars: chunkChars,
+          totalChars,
+          progressPercent,
+          status: 'processing',
+          message: `Processing chunk ${currentChunk}/${totalChunks}...`
+        });
+      }
       
       const res = await fetchWithRetry(
         OPENAI_SPEECH_URL,
@@ -135,16 +216,68 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral') {
         throw new Error('Empty audio blob received from API');
       }
       
-      console.log(`Chunk ${i + 1}/${chunks.length} completed (${blob.size} bytes)`);
+      const chunkDuration = ((Date.now() - chunkStartTime) / 1000).toFixed(1);
+      totalBytesReceived += blob.size;
+      const completedChunks = i + 1;
+      const newProgressPercent = Math.round((completedChunks / totalChunks) * 100);
+      
+      console.log(`Chunk ${currentChunk}/${totalChunks} completed (${blob.size} bytes, ${chunkDuration}s)`);
       blobs.push(blob);
+      
+      // Log chunk completion
+      if (progressCallback) {
+        await progressCallback({
+          totalChunks,
+          completedChunks,
+          currentChunk,
+          currentChunkChars: chunkChars,
+          currentChunkSize: blob.size,
+          currentChunkDuration: chunkDuration,
+          totalChars,
+          totalBytesReceived,
+          progressPercent: newProgressPercent,
+          status: 'completed',
+          message: `Chunk ${currentChunk}/${totalChunks} completed (${blob.size} bytes, ${chunkDuration}s)`
+        });
+      }
+      
+      // Check for cancellation after chunk completion
+      if (bookmarkId && activeGenerations.get(bookmarkId)?.cancelled) {
+        console.log(`Audio generation cancelled for bookmark ${bookmarkId} after chunk ${currentChunk}`);
+        activeGenerations.delete(bookmarkId);
+        if (progressCallback) {
+          await progressCallback({
+            totalChunks,
+            completedChunks,
+            currentChunk,
+            totalChars,
+            progressPercent: newProgressPercent,
+            status: 'cancelled',
+            cancelledAt: currentChunk
+          });
+        }
+        throw new Error('Audio generation cancelled by user');
+      }
       
       // Small delay between chunks to avoid rate limiting
       if (i < chunks.length - 1) {
         await new Promise(r => setTimeout(r, 300));
       }
     } catch (e) {
-      console.error(`Error processing chunk ${i + 1}/${chunks.length}:`, e);
-      throw new Error(`Failed to generate audio for chunk ${i + 1}/${chunks.length}: ${e.message}`);
+      console.error(`Error processing chunk ${currentChunk}/${totalChunks}:`, e);
+      if (progressCallback) {
+        await progressCallback({
+          totalChunks,
+          completedChunks: i,
+          currentChunk,
+          totalChars,
+          progressPercent: Math.round((i / totalChunks) * 100),
+          status: 'error',
+          error: e.message,
+          failedAt: currentChunk
+        });
+      }
+      throw new Error(`Failed to generate audio for chunk ${currentChunk}/${totalChunks}: ${e.message}`);
     }
   }
 
@@ -153,16 +286,36 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral') {
   }
 
   console.log(`All chunks processed. Combining ${blobs.length} audio blob(s)...`);
+  const combineStartTime = Date.now();
   const blob = blobs.length === 1 ? blobs[0] : new Blob(blobs, { type: 'audio/mpeg' });
   const buf = await blob.arrayBuffer();
   const bytes = new Uint8Array(buf);
   let binary = '';
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  console.log(`Audio generation complete. Total size: ${blob.size} bytes`);
+  const combineDuration = ((Date.now() - combineStartTime) / 1000).toFixed(1);
+  
+  console.log(`Audio generation complete. Total size: ${blob.size} bytes, combined in ${combineDuration}s`);
+  
+  // Return base64 string (can't attach properties to string, metadata tracked via progress callback)
   return btoa(binary);
 }
 
+// Track active audio generation tasks for cancellation
+const activeGenerations = new Map();
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Handle cancel request
+  if (msg.type === 'CANCEL_AUDIO_GENERATION' && msg.bookmarkId) {
+    const bookmarkId = msg.bookmarkId;
+    if (activeGenerations.has(bookmarkId)) {
+      activeGenerations.set(bookmarkId, { cancelled: true });
+      sendResponse({ ok: true, cancelled: true });
+    } else {
+      sendResponse({ ok: true, cancelled: false, message: 'No active generation found' });
+    }
+    return false;
+  }
+  
   if (msg.type !== 'GENERATE_AUDIO' || !msg.bookmarkId) {
     sendResponse({ ok: false, error: 'Invalid message' });
     return false;
@@ -170,6 +323,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
   const bookmarkId = msg.bookmarkId;
   let responded = false;
+  
+  // Mark generation as active
+  activeGenerations.set(bookmarkId, { cancelled: false });
 
   const respond = (result) => {
     if (!responded) {
@@ -179,22 +335,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   };
 
   (async () => {
+    const startTime = Date.now();
+    let bookmarkTitle = 'Unknown';
+    
     try {
       const data = await getData();
       const idx = (data.bookmarks || []).findIndex(b => b.id === bookmarkId);
       if (idx < 0) {
+        await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Bookmark not found');
         respond({ ok: false, error: 'Bookmark not found' });
         return;
       }
       const b = data.bookmarks[idx];
+      bookmarkTitle = b.title || 'Untitled';
       const text = (b.extractedContent || '').trim();
       const apiKey = (data.settings?.openaiApiKey || '').trim();
       const voice = data.settings?.openaiVoice || 'coral';
+
+      // Log start
+      await saveJobLog(bookmarkId, bookmarkTitle, 'started', 'Audio generation started', {
+        textLength: text.length,
+        voice: voice
+      });
 
       if (!text || !apiKey) {
         delete b.audioStatus;
         data.bookmarks[idx] = b;
         await setData(data);
+        await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Missing content or API key');
         respond({ ok: false, error: 'Missing content or API key' });
         return;
       }
@@ -204,8 +372,52 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         setTimeout(() => reject(new Error('Audio generation timeout (10 minutes). Article may be too long.')), 10 * 60 * 1000)
       );
 
+      // Progress callback for detailed logging
+      let lastLoggedProgress = 0;
+      let chunkMetadata = { totalChunks: 0, completedChunks: 0 };
+      
+      const progressCallback = async (progress) => {
+        const { totalChunks, completedChunks, currentChunk, progressPercent, status, message } = progress;
+        chunkMetadata = { totalChunks, completedChunks };
+        
+        // Log every 10% progress or on status changes or every chunk for small jobs
+        const shouldLog = progressPercent - lastLoggedProgress >= 10 || 
+                         status !== 'completed' || 
+                         currentChunk === totalChunks ||
+                         totalChunks <= 5; // Log every chunk for small jobs (5 or fewer chunks)
+        
+        if (shouldLog) {
+          const logMessage = message || 
+            `Chunk ${currentChunk}/${totalChunks} - ${completedChunks} completed (${progressPercent}%)`;
+          
+          await saveJobLog(bookmarkId, bookmarkTitle, 'progress', logMessage, {
+            totalChunks,
+            completedChunks,
+            currentChunk,
+            progressPercent,
+            status,
+            currentChunkChars: progress.currentChunkChars,
+            currentChunkSize: progress.currentChunkSize,
+            currentChunkDuration: progress.currentChunkDuration,
+            totalChars: progress.totalChars,
+            totalBytesReceived: progress.totalBytesReceived
+          });
+          
+          lastLoggedProgress = progressPercent;
+        }
+      };
+      
       const base64 = await Promise.race([
-        openaiTTSInBackground(text, apiKey, voice),
+        openaiTTSInBackground(text, apiKey, voice, bookmarkId, progressCallback).then(async (result) => {
+          await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 
+            `All ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks generated, combining and saving...`, {
+            totalChunks: chunkMetadata.totalChunks,
+            completedChunks: chunkMetadata.completedChunks,
+            chunksProcessed: chunkMetadata.completedChunks,
+            chunksTotal: chunkMetadata.totalChunks
+          });
+          return result;
+        }),
         timeoutPromise
       ]);
 
@@ -235,16 +447,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       data.bookmarks[idx] = b;
       await setData(data);
 
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      const audioSize = base64.length;
+      
+      await saveJobLog(bookmarkId, bookmarkTitle, 'success', 
+        `Audio generation completed successfully in ${duration}s - ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks`, {
+        duration: duration,
+        totalChunks: chunkMetadata.totalChunks,
+        completedChunks: chunkMetadata.completedChunks,
+        audioSize: audioSize,
+        audioSizeMB: (audioSize / (1024 * 1024)).toFixed(2),
+        chunksProcessed: chunkMetadata.completedChunks,
+        chunksTotal: chunkMetadata.totalChunks
+      });
+
       console.log(`Audio generation successful for bookmark ${bookmarkId}`);
+      activeGenerations.delete(bookmarkId);
       try { 
         chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
       } catch (_) {}
       
       respond({ ok: true });
     } catch (e) {
+      // Clean up on error or cancellation
+      activeGenerations.delete(bookmarkId);
       const errorMessage = String(e.message || 'Unknown error');
       const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('QUOTA') || 
                           errorMessage.includes('Resource::kQuotaBytes');
+      const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('Timeout');
+      const isCancelled = errorMessage.includes('cancelled') || errorMessage.includes('Cancelled');
+      
+      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+      
+      // Try to get chunk progress from error details if available
+      let errorDetails = {
+        duration: duration,
+        isQuotaError,
+        isTimeout,
+        isCancelled
+      };
+      
+      // Extract chunk info from error message if available
+      const chunkMatch = errorMessage.match(/chunk (\d+)\/(\d+)/i);
+      if (chunkMatch) {
+        errorDetails.failedAtChunk = parseInt(chunkMatch[1]);
+        errorDetails.totalChunks = parseInt(chunkMatch[2]);
+        errorDetails.completedChunks = parseInt(chunkMatch[1]) - 1;
+      }
+      
+      // Log error with detailed info
+      await saveJobLog(bookmarkId, bookmarkTitle, isCancelled ? 'cancelled' : 'error', 
+        isCancelled ? 'Audio generation cancelled by user' : errorMessage, {
+        ...errorDetails,
+        stack: e.stack
+      });
       
       console.error('Background audio generation failed:', {
         bookmarkId,
@@ -267,8 +523,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           // Store error status instead of just deleting audioStatus
           data.bookmarks[idx].audioStatus = 'error';
           data.bookmarks[idx].audioError = userFriendlyError;
+          data.bookmarks[idx].audioErrorTime = Date.now(); // Track when error occurred for auto-reprocess
           await setData(data);
           console.log(`Error status saved for bookmark ${bookmarkId}: ${userFriendlyError}`);
+          
+          // Auto-reprocess after 10 minutes if it was a timeout error
+          if (isTimeout && !isCancelled) {
+            setTimeout(async () => {
+              try {
+                const checkData = await getData();
+                const checkIdx = checkData.bookmarks.findIndex(x => x.id === bookmarkId);
+                if (checkIdx >= 0 && checkData.bookmarks[checkIdx].audioStatus === 'error') {
+                  const errorTime = checkData.bookmarks[checkIdx].audioErrorTime || 0;
+                  // Only auto-reprocess if error is still present and it's been 10 minutes
+                  if (Date.now() - errorTime >= 10 * 60 * 1000) {
+                    await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 'Auto-reprocessing after timeout...');
+                    checkData.bookmarks[checkIdx].audioStatus = 'generating';
+                    delete checkData.bookmarks[checkIdx].audioError;
+                    delete checkData.bookmarks[checkIdx].audioErrorTime;
+                    await setData(checkData);
+                    // Trigger regeneration
+                    chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId }).catch(() => {});
+                  }
+                }
+              } catch (err) {
+                console.error('Auto-reprocess failed:', err);
+              }
+            }, 10 * 60 * 1000); // 10 minutes
+          }
         }
       } catch (err) {
         console.error('Failed to save error status:', err);

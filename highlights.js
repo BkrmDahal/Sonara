@@ -154,13 +154,19 @@ class HighlightsManager {
     try {
       await this.init();
       
+      // Ensure ID is a number (IndexedDB auto-increment IDs are numbers)
+      const id = typeof highlightId === 'string' ? parseInt(highlightId, 10) : Number(highlightId);
+      
+      if (isNaN(id)) {
+        throw new Error(`Invalid highlight ID: ${highlightId}`);
+      }
+      
       const transaction = this.db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {
-        const request = store.delete(highlightId);
+        const request = store.delete(id);
         request.onsuccess = () => {
-          console.log(`Highlight deleted: ${highlightId}`);
           resolve();
         };
         request.onerror = () => {
@@ -170,6 +176,60 @@ class HighlightsManager {
       });
     } catch (error) {
       console.error('Failed to delete highlight:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete all highlights for a bookmark
+   * @param {string} bookmarkId - The bookmark ID
+   * @returns {Promise<number>} - Number of highlights deleted
+   */
+  async deleteHighlightsForBookmark(bookmarkId) {
+    try {
+      await this.init();
+      
+      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const store = transaction.objectStore(this.storeName);
+      const index = store.index('bookmarkId');
+      
+      return new Promise((resolve, reject) => {
+        const getRequest = index.getAll(bookmarkId);
+        getRequest.onsuccess = () => {
+          const highlights = getRequest.result;
+          if (highlights.length === 0) {
+            resolve(0);
+            return;
+          }
+          
+          let deletedCount = 0;
+          let errorCount = 0;
+          
+          highlights.forEach(highlight => {
+            const deleteRequest = store.delete(highlight.id);
+            deleteRequest.onsuccess = () => {
+              deletedCount++;
+              if (deletedCount + errorCount === highlights.length) {
+                console.log(`Deleted ${deletedCount} highlight(s) for bookmark ${bookmarkId}`);
+                resolve(deletedCount);
+              }
+            };
+            deleteRequest.onerror = () => {
+              console.error(`Error deleting highlight ${highlight.id}:`, deleteRequest.error);
+              errorCount++;
+              if (deletedCount + errorCount === highlights.length) {
+                resolve(deletedCount);
+              }
+            };
+          });
+        };
+        getRequest.onerror = () => {
+          console.error('Error getting highlights for deletion:', getRequest.error);
+          reject(getRequest.error);
+        };
+      });
+    } catch (error) {
+      console.error('Failed to delete highlights for bookmark:', error);
       throw error;
     }
   }
