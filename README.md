@@ -2,6 +2,8 @@
 
 A Chrome extension that saves articles and reads them to you with AI-powered voices. Save any article, listen while you work, and never miss great content.
 
+<img src="assets/product/Article%20list.png" alt="Article List" width="600">
+
 ## ✨ Features
 
 ### 📚 Save & Organize Articles
@@ -10,6 +12,8 @@ A Chrome extension that saves articles and reads them to you with AI-powered voi
 - **Tags & search**: Organize with tags and find articles quickly
 - **Archive**: Mark articles as done to keep your list organized
 - **Edit content**: Edit article text and regenerate audio with your changes
+
+<img src="assets/product/Article%20view.png" alt="Article View" width="600">
 
 ### 🎧 Listen to Articles
 - **AI voices**: High-quality text-to-speech using OpenAI (13 voice options)
@@ -23,6 +27,8 @@ A Chrome extension that saves articles and reads them to you with AI-powered voi
 - **Save quotes**: Select and save important text from articles
 - **View all highlights**: See all your saved quotes in one place
 - **Quick access**: Jump back to any article from your highlights
+
+<img src="assets/product/Highlight.png" alt="Highlights" width="600">
 
 ### 🔍 Find What You Need
 - **Search articles**: Search by title, URL, or tags
@@ -49,6 +55,8 @@ A Chrome extension that saves articles and reads them to you with AI-powered voi
    - Open Settings (⚙ icon)
    - Add your OpenAI API key for high-quality voices
    - Get your key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+<img src="assets/product/Settings.png" alt="Settings" width="600">
 
 3. **Start using**
    - Visit any article
@@ -109,6 +117,30 @@ That's it! Audio will generate automatically. Click "Listen" when you're ready t
 ## 🛠️ For Developers
 
 Built with vanilla JavaScript, no frameworks. Uses Chrome Storage API and IndexedDB for data. See the code for implementation details.
+
+## ⚠️ Known Issues
+
+- **Article parsing is basic**: Due to Chrome extension limitations, we cannot use third-party libraries for article extraction. The current parser uses simple heuristics to find article content, which may not work perfectly on all websites. Some complex sites may require manual content selection.
+
+- **Audio generation timeout**: Very long articles (over 10 minutes of audio) may timeout during generation. The system will auto-retry after 10 minutes if a timeout occurs.
+
+- **Browser TTS limitations**: When OpenAI API key is not configured, the extension uses browser's built-in TTS which has limited voice options and quality compared to OpenAI voices.
+
+- **Large audio files**: Very large audio files may take time to load or play, especially on slower connections.
+
+- **Search in complex HTML**: Article search may not work perfectly on articles with complex HTML structures or embedded content.
+
+## 📋 Todo
+
+- [ ] Improve article extraction with better heuristics
+- [ ] Add support for more article formats
+- [ ] Chrome Sync for cross-device access
+- [ ] Export/Import bookmarks (JSON)
+- [ ] Keyboard shortcuts
+- [ ] Batch operations (delete multiple, archive multiple)
+- [ ] Reading statistics
+- [ ] Better error messages for article extraction failures
+- [ ] Support for PDF articles
 
 ## 📝 License
 
