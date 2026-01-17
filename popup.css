@@ -89,6 +89,17 @@ body {
   border-color: #d1d5db;
 }
 
+.btn-icon.active {
+  background: #3b82f6;
+  color: #ffffff;
+  border-color: #3b82f6;
+}
+
+.btn-icon.active:hover {
+  background: #2563eb;
+  border-color: #2563eb;
+}
+
 /* Tooltip for icon buttons */
 .btn-icon[title]:hover::after {
   content: attr(title);

@@ -14,8 +14,10 @@ class StorageManager {
         ttsSpeed: 1.0,
         autoExtract: true,
         openaiApiKey: '',
-        openaiVoice: 'coral'
-      }
+        openaiVoice: 'coral',
+        autoPlayAudio: false
+      },
+      jobLogs: []
     };
   }
 
@@ -78,7 +80,9 @@ class StorageManager {
   // Delete bookmark
   async deleteBookmark(bookmarkId) {
     const data = await this.getAllData();
-    data.bookmarks = data.bookmarks.filter(b => b.id !== bookmarkId);
+    // Convert both to strings for reliable comparison
+    const bookmarkIdStr = String(bookmarkId);
+    data.bookmarks = data.bookmarks.filter(b => String(b.id) !== bookmarkIdStr);
     await this.saveAllData(data);
   }
 
@@ -143,6 +147,46 @@ class StorageManager {
   async saveSettings(settings) {
     const data = await this.getAllData();
     data.settings = { ...data.settings, ...settings };
+    await this.saveAllData(data);
+  }
+
+  // Get job logs
+  async getJobLogs(bookmarkId = null) {
+    const data = await this.getAllData();
+    const logs = data.jobLogs || [];
+    if (bookmarkId) {
+      return logs.filter(log => log.bookmarkId === bookmarkId).sort((a, b) => b.timestamp - a.timestamp);
+    }
+    return logs.sort((a, b) => b.timestamp - a.timestamp);
+  }
+
+  // Save job log
+  async saveJobLog(log) {
+    const data = await this.getAllData();
+    if (!data.jobLogs) {
+      data.jobLogs = [];
+    }
+    // Add timestamp if not present
+    if (!log.timestamp) {
+      log.timestamp = Date.now();
+    }
+    data.jobLogs.push(log);
+    // Keep only last 1000 logs to prevent storage bloat
+    if (data.jobLogs.length > 1000) {
+      data.jobLogs = data.jobLogs.slice(-1000);
+    }
+    await this.saveAllData(data);
+    return log;
+  }
+
+  // Clear old logs (older than 30 days)
+  async clearOldLogs() {
+    const data = await this.getAllData();
+    if (!data.jobLogs) {
+      return;
+    }
+    const thirtyDaysAgo = Date.now() - (30 * 24 * 60 * 60 * 1000);
+    data.jobLogs = data.jobLogs.filter(log => log.timestamp > thirtyDaysAgo);
     await this.saveAllData(data);
   }
 }
