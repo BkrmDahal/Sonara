@@ -1,4 +1,4 @@
-# Sonara
+# <img src="assets/original logo.png" alt="Sonara Logo" width="32" height="32"> Sonara
 
 A Chrome extension that saves articles and reads them to you with AI-powered voices. Save any article, listen while you work, and never miss great content.
 
