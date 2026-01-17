@@ -69,6 +69,24 @@ function setupEventListeners() {
   document.getElementById('saveAndRegenerateBtn').addEventListener('click', handleSaveAndRegenerate);
   document.getElementById('cancelEditBtn').addEventListener('click', handleCancelEdit);
   
+  // Article search
+  document.getElementById('articleSearchInput').addEventListener('input', handleArticleSearch);
+  document.getElementById('articleSearchInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        handleArticleSearchNavigate('prev');
+      } else {
+        handleArticleSearchNavigate('next');
+      }
+    } else if (e.key === 'Escape') {
+      clearArticleSearch();
+    }
+  });
+  document.getElementById('articleSearchPrevBtn').addEventListener('click', () => handleArticleSearchNavigate('prev'));
+  document.getElementById('articleSearchNextBtn').addEventListener('click', () => handleArticleSearchNavigate('next'));
+  document.getElementById('articleSearchCloseBtn').addEventListener('click', clearArticleSearch);
+  
   // Delete confirmation modal
   document.getElementById('closeDeleteConfirmModal').addEventListener('click', closeDeleteConfirmModal);
   document.getElementById('cancelDeleteBtn').addEventListener('click', closeDeleteConfirmModal);
@@ -654,6 +672,9 @@ async function handleListen(bookmarkId) {
     isEditMode = false;
     articleContentEl.contentEditable = 'false';
     document.getElementById('editArticleToolbar').style.display = 'none';
+    
+    // Clear search when opening new article
+    clearArticleSearch();
     
     // Load and display highlights for this article
     await loadHighlightsForArticle(bookmarkId, articleContentEl);
@@ -1431,6 +1452,9 @@ function closeTTSModal() {
   if (isEditMode) {
     handleCancelEdit();
   }
+  
+  // Clear search
+  clearArticleSearch();
   
   document.getElementById('ttsModal').classList.remove('active');
   // Don't clear currentTTSBookmark if audio is still playing - keep bottom player visible
@@ -2815,6 +2839,267 @@ async function handleGenerateAudio() {
 window.openArticleFromHighlight = openArticleFromHighlight;
 window.deleteHighlight = deleteHighlight;
 
+// ========== ARTICLE SEARCH FUNCTIONALITY ==========
+
+let articleSearchResults = [];
+let articleSearchCurrentIndex = -1;
+let articleSearchOriginalContent = null;
+
+/**
+ * Handle article search input
+ */
+function handleArticleSearch() {
+  const searchInput = document.getElementById('articleSearchInput');
+  const searchTerm = searchInput.value.trim();
+  const articleContentEl = document.getElementById('articleContent');
+  
+  if (!searchTerm) {
+    clearArticleSearch();
+    return;
+  }
+  
+  // Don't search in edit mode
+  if (isEditMode) {
+    return;
+  }
+  
+  // Store original content if not already stored
+  if (!articleSearchOriginalContent) {
+    articleSearchOriginalContent = articleContentEl.innerHTML;
+  }
+  
+  // Find all matches (case-insensitive) in the original text content
+  // We need to get text content from the original HTML, not the current (which might have highlights)
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = articleSearchOriginalContent;
+  const textContent = tempDiv.textContent || tempDiv.innerText;
+  
+  const regex = new RegExp(escapeRegex(searchTerm), 'gi');
+  const matches = [];
+  let match;
+  
+  while ((match = regex.exec(textContent)) !== null) {
+    matches.push({
+      index: match.index,
+      length: match[0].length
+    });
+  }
+  
+  if (matches.length === 0) {
+    // No matches found
+    articleSearchResults = [];
+    articleSearchCurrentIndex = -1;
+    updateSearchUI(0, -1);
+    // Restore original content
+    articleContentEl.innerHTML = articleSearchOriginalContent;
+    return;
+  }
+  
+  articleSearchResults = matches;
+  articleSearchCurrentIndex = 0;
+  
+  // Highlight all matches
+  highlightSearchResults(articleContentEl, searchTerm, matches);
+  
+  // Scroll to first match
+  scrollToSearchResult(0);
+  
+  updateSearchUI(matches.length, 0);
+}
+
+/**
+ * Escape special regex characters
+ */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Highlight search results in article content
+ */
+function highlightSearchResults(element, searchTerm, matches) {
+  // Restore original content first
+  element.innerHTML = articleSearchOriginalContent;
+  
+  // Use a simpler approach: find and wrap text nodes
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT,
+    null
+  );
+  
+  const textNodes = [];
+  let node = walker.nextNode();
+  let currentTextIndex = 0;
+  
+  // Collect all text nodes with their positions
+  while (node) {
+    const text = node.textContent;
+    if (text.trim()) {
+      textNodes.push({
+        node: node,
+        startIndex: currentTextIndex,
+        endIndex: currentTextIndex + text.length,
+        text: text
+      });
+      currentTextIndex += text.length;
+    }
+    node = walker.nextNode();
+  }
+  
+  // Process matches from end to start to avoid offset issues
+  const regex = new RegExp(escapeRegex(searchTerm), 'gi');
+  let matchIndex = 0;
+  
+  matches.reverse().forEach((match) => {
+    const matchStart = match.index;
+    const matchEnd = matchStart + match.length;
+    
+    // Find the text node containing this match
+    for (const textNodeInfo of textNodes) {
+      if (matchStart >= textNodeInfo.startIndex && matchStart < textNodeInfo.endIndex) {
+        const node = textNodeInfo.node;
+        const nodeText = node.textContent;
+        const offsetInNode = matchStart - textNodeInfo.startIndex;
+        const endOffsetInNode = Math.min(offsetInNode + match.length, nodeText.length);
+        
+        // Only process if this node hasn't been modified
+        if (node.parentNode && !node.parentNode.classList.contains('search-highlight')) {
+          // Split the text node
+          const beforeText = nodeText.substring(0, offsetInNode);
+          const matchText = nodeText.substring(offsetInNode, endOffsetInNode);
+          const afterText = nodeText.substring(endOffsetInNode);
+          
+          // Create new nodes
+          if (beforeText) {
+            const beforeNode = document.createTextNode(beforeText);
+            node.parentNode.insertBefore(beforeNode, node);
+          }
+          
+          const highlightSpan = document.createElement('mark');
+          const index = matches.length - 1 - matchIndex;
+          const isActive = index === articleSearchCurrentIndex;
+          highlightSpan.className = isActive ? 'search-highlight search-highlight-active' : 'search-highlight';
+          highlightSpan.setAttribute('data-search-index', index);
+          highlightSpan.textContent = matchText;
+          node.parentNode.insertBefore(highlightSpan, node);
+          
+          if (afterText) {
+            const afterNode = document.createTextNode(afterText);
+            node.parentNode.insertBefore(afterNode, node);
+          }
+          
+          node.remove();
+          matchIndex++;
+          break;
+        }
+      }
+    }
+  });
+}
+
+/**
+ * Navigate to next/previous search result
+ */
+function handleArticleSearchNavigate(direction) {
+  if (articleSearchResults.length === 0) {
+    return;
+  }
+  
+  if (direction === 'next') {
+    articleSearchCurrentIndex = (articleSearchCurrentIndex + 1) % articleSearchResults.length;
+  } else {
+    articleSearchCurrentIndex = articleSearchCurrentIndex <= 0 
+      ? articleSearchResults.length - 1 
+      : articleSearchCurrentIndex - 1;
+  }
+  
+  // Update highlight classes before scrolling
+  const highlights = document.querySelectorAll('.search-highlight');
+  highlights.forEach((highlight, index) => {
+    if (index === articleSearchCurrentIndex) {
+      highlight.classList.add('search-highlight-active');
+    } else {
+      highlight.classList.remove('search-highlight-active');
+    }
+  });
+  
+  scrollToSearchResult(articleSearchCurrentIndex);
+  updateSearchUI(articleSearchResults.length, articleSearchCurrentIndex);
+}
+
+/**
+ * Scroll to search result
+ */
+function scrollToSearchResult(index) {
+  const articleContentEl = document.getElementById('articleContent');
+  const highlights = articleContentEl.querySelectorAll('.search-highlight');
+  if (highlights[index]) {
+    highlights[index].scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+}
+
+/**
+ * Update search UI (count, buttons visibility)
+ */
+function updateSearchUI(total, current) {
+  const prevBtn = document.getElementById('articleSearchPrevBtn');
+  const nextBtn = document.getElementById('articleSearchNextBtn');
+  const countSpan = document.getElementById('articleSearchCount');
+  const closeBtn = document.getElementById('articleSearchCloseBtn');
+  const searchInput = document.getElementById('articleSearchInput');
+  
+  if (total > 0) {
+    prevBtn.style.display = 'inline-flex';
+    nextBtn.style.display = 'inline-flex';
+    countSpan.style.display = 'inline-block';
+    closeBtn.style.display = 'inline-flex';
+    countSpan.textContent = `${current + 1}/${total}`;
+    countSpan.style.color = '#6b7280';
+  } else {
+    prevBtn.style.display = 'none';
+    nextBtn.style.display = 'none';
+    if (searchInput && searchInput.value.trim()) {
+      closeBtn.style.display = 'inline-flex';
+      countSpan.style.display = 'inline-block';
+      countSpan.textContent = '0';
+      countSpan.style.color = '#ef4444';
+    } else {
+      closeBtn.style.display = 'none';
+      countSpan.style.display = 'none';
+    }
+  }
+}
+
+/**
+ * Clear article search
+ */
+function clearArticleSearch() {
+  const searchInput = document.getElementById('articleSearchInput');
+  const articleContentEl = document.getElementById('articleContent');
+  
+  if (searchInput) {
+    searchInput.value = '';
+  }
+  
+  // Restore original content
+  if (articleSearchOriginalContent && articleContentEl) {
+    articleContentEl.innerHTML = articleSearchOriginalContent;
+    articleSearchOriginalContent = null;
+  }
+  
+  articleSearchResults = [];
+  articleSearchCurrentIndex = -1;
+  
+  updateSearchUI(0, -1);
+  
+  // Reload highlights if needed
+  if (window.currentTTSBookmark && articleContentEl) {
+    loadHighlightsForArticle(window.currentTTSBookmark.id, articleContentEl);
+    setupTextSelection(window.currentTTSBookmark.id, articleContentEl);
+  }
+}
+
 // ========== ARTICLE EDITING FUNCTIONALITY ==========
 
 /**
@@ -2826,6 +3111,9 @@ function handleEditArticle() {
   const highlightToolbar = document.getElementById('highlightToolbar');
   
   if (!isEditMode) {
+    // Clear search when entering edit mode
+    clearArticleSearch();
+    
     // Enter edit mode
     isEditMode = true;
     articleContentEl.contentEditable = 'true';
