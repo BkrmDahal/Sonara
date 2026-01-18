@@ -382,14 +382,57 @@ function setupEventListeners() {
   const modalStopBtn = document.getElementById('modalStopBtn');
   if (modalPlayPauseBtn) {
     modalPlayPauseBtn.addEventListener('click', async () => {
-      if (window.currentPlayingBookmarkId) {
-        await toggleBottomAudioPlayPause();
-        updateModalAudioControls();
-      } else if (window.currentTTSBookmark) {
-        // Start playing the current bookmark
-        await playAudioInOffscreen(window.currentTTSBookmark.id);
-        window.currentPlayingBookmarkId = window.currentTTSBookmark.id;
-        updateModalAudioControls();
+      try {
+        if (window.currentTTSBookmark) {
+          // Check if the currently loaded audio is for the same article we're viewing
+          if (window.currentPlayingBookmarkId && window.currentPlayingBookmarkId === window.currentTTSBookmark.id) {
+            // Same article - toggle play/pause
+            await toggleBottomAudioPlayPause();
+            updateModalAudioControls();
+          } else {
+            // Different article or no audio loaded - load and play this article's audio
+            await playAudioInOffscreen(window.currentTTSBookmark.id);
+            window.currentPlayingBookmarkId = window.currentTTSBookmark.id;
+            // Update bottom player with the new article info
+            updateBottomAudioPlayerInfo(window.currentTTSBookmark);
+            showBottomAudioPlayer();
+            
+            // Retry loop to ensure audio actually starts playing
+            // Sometimes the audio element needs more time to be ready
+            let maxRetries = 5;
+            let retryDelay = 150;
+            
+            for (let attempt = 0; attempt < maxRetries; attempt++) {
+              await new Promise(resolve => setTimeout(resolve, retryDelay));
+              
+              const stateResponse = await chrome.runtime.sendMessage({
+                type: 'GET_AUDIO_STATE',
+                bookmarkId: window.currentTTSBookmark.id
+              });
+              
+              if (stateResponse && stateResponse.success && stateResponse.state) {
+                if (stateResponse.state.playing) {
+                  // Audio is playing, we're done
+                  break;
+                } else if (stateResponse.state.bookmarkId === window.currentTTSBookmark.id) {
+                  // Audio loaded for correct bookmark but not playing - try to start it
+                  await chrome.runtime.sendMessage({
+                    type: 'AUDIO_RESUME',
+                    bookmarkId: window.currentTTSBookmark.id
+                  });
+                }
+              }
+              
+              // Increase delay for next retry
+              retryDelay = Math.min(retryDelay * 1.5, 500);
+            }
+            
+            updateBottomAudioPlayer();
+            updateModalAudioControls();
+          }
+        }
+      } catch (error) {
+        console.error('Error in play button handler:', error);
       }
     });
   }
@@ -875,6 +918,12 @@ async function handleListen(bookmarkId) {
     // Setup text selection for highlighting
     setupTextSelection(bookmarkId, articleContentEl);
     
+    // Set modal title to article title
+    const modalTitle = document.getElementById('ttsModalTitle');
+    if (modalTitle) {
+      modalTitle.textContent = bookmark.title || 'Untitled';
+    }
+    
     document.getElementById('ttsModal').classList.add('active');
     
     // Set original article link (hide for custom audio)
@@ -938,9 +987,9 @@ async function handleListen(bookmarkId) {
     if (audioData) {
       // Load audio in offscreen document (but don't play - user must click play)
       try {
-        // Check if audio is currently playing BEFORE loading new audio
-        let isCurrentlyPlaying = false;
-        let currentlyPlayingBookmarkId = null;
+        // Check if audio is currently loaded (playing or paused) BEFORE loading new audio
+        let isAudioLoadedForOther = false;
+        let currentlyLoadedBookmarkId = null;
         
         if (window.currentPlayingBookmarkId) {
           try {
@@ -948,9 +997,13 @@ async function handleListen(bookmarkId) {
               type: 'GET_AUDIO_STATE'
             });
             if (currentState && currentState.success && currentState.state) {
-              if (currentState.state.playing && currentState.state.bookmarkId) {
-                isCurrentlyPlaying = true;
-                currentlyPlayingBookmarkId = currentState.state.bookmarkId;
+              // Check if audio is loaded (has bookmarkId), not just if it's playing
+              if (currentState.state.bookmarkId) {
+                currentlyLoadedBookmarkId = currentState.state.bookmarkId;
+                // Only consider it "loaded for other" if it's a DIFFERENT article
+                if (currentlyLoadedBookmarkId !== bookmarkId) {
+                  isAudioLoadedForOther = true;
+                }
               }
             }
           } catch (error) {
@@ -959,20 +1012,20 @@ async function handleListen(bookmarkId) {
         }
         
         // Only load new audio if:
-        // 1. No audio is currently playing, OR
+        // 1. No audio is currently loaded for a different article, OR
         // 2. This is the same article that's already loaded
-        if (!isCurrentlyPlaying || currentlyPlayingBookmarkId === bookmarkId) {
-          // Safe to load - no audio playing or same article
+        if (!isAudioLoadedForOther) {
+          // Safe to load - no audio loaded or same article
           await loadAudioInOffscreen(bookmarkId, audioData, mimeType, bookmark.title);
           updateBottomAudioPlayerInfo(bookmark);
           window.currentPlayingBookmarkId = bookmarkId;
         } else {
-          // Different article is playing - DON'T load new audio yet
+          // Different article has audio loaded - DON'T load new audio yet
           // This prevents stopping current playback
           // Audio will be loaded when user clicks play
-          console.log('Audio is playing for different article (', currentlyPlayingBookmarkId, '), not loading new audio for:', bookmarkId);
+          console.log('Audio is loaded for different article (', currentlyLoadedBookmarkId, '), not loading new audio for:', bookmarkId);
           console.log('New audio will be loaded when user clicks play');
-          // Don't change currentPlayingBookmarkId - keep the playing one
+          // Don't change currentPlayingBookmarkId - keep the loaded one
           // But still set up local player for UI
         }
         
@@ -1006,33 +1059,38 @@ async function handleListen(bookmarkId) {
         ttsEl.style.display = 'none';
         bookmark.audioUrl = audioUrl;
         
-        // Don't auto-play when opening article - user must click play
-        // Always show bottom audio player when audio is loaded (even if not playing)
-        console.log('Audio loaded, showing bottom player for bookmark:', bookmarkId);
-        
-        // Force show the player immediately
-        const bottomPlayer = document.getElementById('bottomAudioPlayer');
-        if (bottomPlayer) {
-          bottomPlayer.style.display = 'flex';
-          bottomPlayer.style.visibility = 'visible';
-          bottomPlayer.style.opacity = '1';
-        }
-        
-        showBottomAudioPlayer();
-        updateBottomAudioPlayer();
-        updateModalAudioControls();
-        
-        // Force show the player after a short delay to ensure it's visible
-        setTimeout(() => {
+        // Only update bottom player if we loaded audio for this article
+        // Don't change bottom player when another article's audio is loaded
+        if (!isAudioLoadedForOther) {
+          console.log('Audio loaded, showing bottom player for bookmark:', bookmarkId);
+          
+          // Force show the player immediately
+          const bottomPlayer = document.getElementById('bottomAudioPlayer');
           if (bottomPlayer) {
             bottomPlayer.style.display = 'flex';
             bottomPlayer.style.visibility = 'visible';
             bottomPlayer.style.opacity = '1';
-            console.log('Bottom player forced visible');
           }
+          
+          showBottomAudioPlayer();
           updateBottomAudioPlayer();
           updateModalAudioControls();
-        }, 200);
+          
+          // Force show the player after a short delay to ensure it's visible
+          setTimeout(() => {
+            if (bottomPlayer) {
+              bottomPlayer.style.display = 'flex';
+              bottomPlayer.style.visibility = 'visible';
+              bottomPlayer.style.opacity = '1';
+              console.log('Bottom player forced visible');
+            }
+            updateBottomAudioPlayer();
+            updateModalAudioControls();
+          }, 200);
+        } else {
+          // Another article's audio is loaded - just update modal controls for this article
+          updateModalAudioControls();
+        }
       } catch (error) {
         console.error('Error loading audio in offscreen:', error);
         // Fallback to local player
@@ -1087,13 +1145,13 @@ async function handleListen(bookmarkId) {
     // Archive button state
     const archiveBtn = document.getElementById('sendToArchiveBtn');
     if (bookmark.archived) {
-      archiveBtn.textContent = '✓ Archived';
       archiveBtn.disabled = true;
       archiveBtn.classList.add('archived');
+      archiveBtn.title = 'Archived';
     } else {
-      archiveBtn.textContent = '📦 Send to Archive';
       archiveBtn.disabled = false;
       archiveBtn.classList.remove('archived');
+      archiveBtn.title = 'Archive';
     }
     
     // Update controls after modal is shown
@@ -1836,9 +1894,9 @@ async function handleSendToArchive() {
     await storageManager.archiveBookmark(id);
     window.currentTTSBookmark.archived = true;
     const btn = document.getElementById('sendToArchiveBtn');
-    btn.textContent = '✓ Archived';
     btn.disabled = true;
     btn.classList.add('archived');
+    btn.title = 'Archived';
     await loadBookmarks();
   } catch (e) {
     console.error('Archive failed:', e);
@@ -2304,6 +2362,29 @@ async function updateBottomAudioPlayer() {
   }
 }
 
+// Helper function to update play/pause button state with icon and text
+function setPlayPauseButtonState(btn, isPlaying) {
+  if (!btn) return;
+  
+  const playIcon = btn.querySelector('.play-icon');
+  const pauseIcon = btn.querySelector('.pause-icon');
+  const textSpan = btn.querySelector('.btn-text');
+  
+  if (isPlaying) {
+    if (playIcon) playIcon.style.display = 'none';
+    if (pauseIcon) pauseIcon.style.display = 'block';
+    if (textSpan) textSpan.textContent = 'Pause';
+    btn.classList.remove('btn-primary');
+    btn.classList.add('btn-secondary');
+  } else {
+    if (playIcon) playIcon.style.display = 'block';
+    if (pauseIcon) pauseIcon.style.display = 'none';
+    if (textSpan) textSpan.textContent = 'Play';
+    btn.classList.remove('btn-secondary');
+    btn.classList.add('btn-primary');
+  }
+}
+
 // Update modal audio controls
 async function updateModalAudioControls() {
   const modalPlayPauseBtn = document.getElementById('modalPlayPauseBtn');
@@ -2324,15 +2405,7 @@ async function updateModalAudioControls() {
         const isPlaying = state.playing;
         
         // Update play/pause button
-        if (isPlaying) {
-          modalPlayPauseBtn.textContent = '⏸ Pause';
-          modalPlayPauseBtn.classList.remove('btn-primary');
-          modalPlayPauseBtn.classList.add('btn-secondary');
-        } else {
-          modalPlayPauseBtn.textContent = '▶ Play';
-          modalPlayPauseBtn.classList.remove('btn-secondary');
-          modalPlayPauseBtn.classList.add('btn-primary');
-        }
+        setPlayPauseButtonState(modalPlayPauseBtn, isPlaying);
         
         // Update stop button state
         if (modalStopBtn) {
@@ -2372,23 +2445,13 @@ async function updateModalAudioControls() {
           modalAudioTime.textContent = `${formatTime(audioPlayer.currentTime)} / ${formatTime(audioPlayer.duration)}`;
         }
         if (modalPlayPauseBtn) {
-          if (audioPlayer.paused) {
-            modalPlayPauseBtn.textContent = '▶ Play';
-            modalPlayPauseBtn.classList.remove('btn-secondary');
-            modalPlayPauseBtn.classList.add('btn-primary');
-          } else {
-            modalPlayPauseBtn.textContent = '⏸ Pause';
-            modalPlayPauseBtn.classList.remove('btn-primary');
-            modalPlayPauseBtn.classList.add('btn-secondary');
-          }
+          setPlayPauseButtonState(modalPlayPauseBtn, !audioPlayer.paused);
         }
       }
     }
   } else {
     // No audio loaded
-    modalPlayPauseBtn.textContent = '▶ Play';
-    modalPlayPauseBtn.classList.remove('btn-secondary');
-    modalPlayPauseBtn.classList.add('btn-primary');
+    setPlayPauseButtonState(modalPlayPauseBtn, false);
     if (modalStopBtn) {
       modalStopBtn.disabled = false;
       modalStopBtn.style.opacity = '1';

@@ -241,7 +241,7 @@
       <div class="modal-content modal-large modal-tts">
         <div class="modal-header">
           <div class="modal-header-content">
-            <h2>Listen to Article</h2>
+            <h2 id="ttsModalTitle">Listen to Article</h2>
             <div style="display: flex; gap: 8px; align-items: center;">
               <button id="editArticleBtn" class="btn btn-icon" title="Edit article content">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -288,20 +288,44 @@
         <div class="modal-body modal-body-tts">
           <div class="tts-controls-sticky">
             <div id="audioPlayerContainer" class="audio-player-container" style="display: none;">
-              <div class="audio-player-compact">
-                <audio id="audioPlayer"></audio>
-                <div class="audio-info-compact">
-                  <div class="audio-controls-inline">
-                    <button id="modalPlayPauseBtn" class="btn btn-primary btn-small">▶ Play</button>
-                    <button id="modalStopBtn" class="btn btn-secondary btn-small">⏹ Stop</button>
-                    <span id="modalAudioTime" class="audio-time-display">0:00 / 0:00</span>
-                  </div>
-                  <div class="audio-actions-compact">
-                    <button id="downloadAudioBtn" class="btn btn-secondary btn-small">⬇ Download</button>
-                    <button id="reprocessAudioBtn" class="btn btn-secondary btn-small" title="Regenerate audio">🔄 Reprocess</button>
-                    <button id="sendToArchiveBtn" class="btn btn-archive btn-small" title="Mark as done">📦 Archive</button>
-                  </div>
-                </div>
+              <audio id="audioPlayer"></audio>
+              <span id="modalAudioTime" style="display: none;"></span>
+              <div class="audio-controls-row">
+                <button type="button" id="modalPlayPauseBtn" class="btn btn-primary btn-small btn-with-icon">
+                  <svg class="btn-icon-svg play-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                  </svg>
+                  <svg class="btn-icon-svg pause-icon" viewBox="0 0 24 24" fill="currentColor" stroke="none" style="display: none;">
+                    <rect x="6" y="4" width="4" height="16"></rect>
+                    <rect x="14" y="4" width="4" height="16"></rect>
+                  </svg>
+                  <span class="btn-text">Play</span>
+                </button>
+                <button type="button" id="modalStopBtn" class="btn btn-secondary btn-small btn-with-icon">
+                  <svg class="btn-icon-svg" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                  </svg>
+                  <span class="btn-text">Stop</span>
+                </button>
+                <div class="audio-controls-spacer"></div>
+                <button type="button" id="downloadAudioBtn" class="audio-action-btn" title="Download audio">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                  </svg>
+                </button>
+                <button type="button" id="reprocessAudioBtn" class="audio-action-btn" title="Regenerate audio">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="23 4 23 10 17 10"></polyline>
+                    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                  </svg>
+                </button>
+                <button type="button" id="sendToArchiveBtn" class="audio-action-btn" title="Archive">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                    <polyline points="20 6 9 17 4 12"></polyline>
+                  </svg>
+                </button>
               </div>
             </div>
             

@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', () => {
   
   // Listen for messages from popup/background
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    handleMessage(message, sendResponse);
+    handleMessage(message, sender, sendResponse);
     return true; // Keep channel open for async response
   });
   
@@ -170,20 +170,48 @@ async function loadAudio(bookmarkId, audioData, mimeType, title, forceLoad = fal
     
     console.log('Audio loaded in offscreen for bookmark:', bookmarkId, 'Size:', audioBlob.size, 'bytes', forceLoad ? '(forced)' : '');
     
-    // Wait for audio to be ready (but don't play)
+    // Wait for audio to be ready to play (not just loaded)
+    // We need canplay event (readyState >= 3) not just loadeddata (readyState >= 2)
     await new Promise((resolve, reject) => {
-      if (audioPlayer.readyState >= 2) {
-        // Already loaded
+      if (audioPlayer.readyState >= 3) {
+        // Already ready to play
+        console.log('Audio already ready to play, readyState:', audioPlayer.readyState);
         resolve();
       } else {
-        audioPlayer.addEventListener('loadeddata', resolve, { once: true });
-        audioPlayer.addEventListener('error', reject, { once: true });
+        const onCanPlay = () => {
+          console.log('Audio canplay event fired, readyState:', audioPlayer.readyState);
+          cleanup();
+          resolve();
+        };
+        const onError = (e) => {
+          cleanup();
+          reject(new Error('Audio load error: ' + (e.message || 'unknown')));
+        };
+        const cleanup = () => {
+          audioPlayer.removeEventListener('canplay', onCanPlay);
+          audioPlayer.removeEventListener('canplaythrough', onCanPlay);
+          audioPlayer.removeEventListener('error', onError);
+        };
+        
+        audioPlayer.addEventListener('canplay', onCanPlay, { once: true });
+        audioPlayer.addEventListener('canplaythrough', onCanPlay, { once: true });
+        audioPlayer.addEventListener('error', onError, { once: true });
+        
         // Timeout after 10 seconds
-        setTimeout(() => reject(new Error('Audio load timeout')), 10000);
+        setTimeout(() => {
+          cleanup();
+          // If we have some data loaded, consider it okay
+          if (audioPlayer.readyState >= 2) {
+            console.log('Audio load timeout but readyState is', audioPlayer.readyState, '- continuing');
+            resolve();
+          } else {
+            reject(new Error('Audio load timeout'));
+          }
+        }, 10000);
       }
     });
     
-    console.log('Audio ready in offscreen, waiting for play command');
+    console.log('Audio ready in offscreen, waiting for play command, readyState:', audioPlayer.readyState);
     
   } catch (error) {
     console.error('Error loading audio:', error);
