@@ -650,6 +650,12 @@ body {
   align-items: center;
   gap: 12px;
   flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.modal-header-content > div {
+  flex-shrink: 0;
 }
 
 .original-article-link {
@@ -676,15 +682,16 @@ body {
 }
 
 .modal-header h2 {
-  font-size: 16px;
+  font-size: 14px;
   font-weight: 600;
   color: #111827;
-  letter-spacing: -0.3px;
+  letter-spacing: -0.2px;
   margin: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 400px;
+  max-width: 280px;
+  flex-shrink: 1;
 }
 
 .close-btn {
