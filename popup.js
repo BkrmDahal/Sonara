@@ -787,8 +787,15 @@ function loadTagSuggestions() {
   }
   
   suggestions.innerHTML = allTags.map(tag => 
-    `<span class="tag-suggestion" onclick="addTagSuggestion('${escapeHtml(tag)}')">${escapeHtml(tag)}</span>`
+    `<span class="tag-suggestion" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`
   ).join('');
+  
+  // Add click handlers for tag suggestions
+  suggestions.querySelectorAll('.tag-suggestion').forEach(el => {
+    el.addEventListener('click', () => {
+      addTagSuggestion(el.dataset.tag);
+    });
+  });
 }
 
 // Add tag suggestion
@@ -1790,8 +1797,15 @@ function loadEditTagSuggestions() {
   }
   
   suggestions.innerHTML = availableTags.map(tag => 
-    `<span class="tag-suggestion" onclick="addEditTagSuggestion('${escapeHtml(tag)}')">${escapeHtml(tag)}</span>`
+    `<span class="tag-suggestion" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`
   ).join('');
+  
+  // Add click handlers for tag suggestions
+  suggestions.querySelectorAll('.tag-suggestion').forEach(el => {
+    el.addEventListener('click', () => {
+      addEditTagSuggestion(el.dataset.tag);
+    });
+  });
 }
 
 // Add tag suggestion to edit input
