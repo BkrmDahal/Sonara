@@ -6,7 +6,7 @@
 let currentBookmarks = [];
 let allTags = [];
 let currentBookmark = null;
-let pendingDeleteBookmarkId = null;
+// pendingDeleteBookmarkId is declared in src/popup/views/modals.js
 let originalMarkdown = null;
 let isEditMode = false;
 

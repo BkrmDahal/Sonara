@@ -507,11 +507,23 @@
     </div>
   </div>
 
-  <script src="storage.js"></script>
-  <script src="audio-storage.js"></script>
-  <script src="highlights.js"></script>
-  <script src="openai-tts.js"></script>
-  <script src="tts.js"></script>
+  <!-- Services -->
+  <script src="src/services/storage.js"></script>
+  <script src="src/services/audio-storage.js"></script>
+  <script src="src/services/highlights.js"></script>
+  <script src="src/services/tts/openai-tts.js"></script>
+  <script src="src/services/tts/browser-tts.js"></script>
+  
+  <!-- Utilities -->
+  <script src="src/utils/helpers.js"></script>
+  <script src="src/utils/markdown.js"></script>
+  
+  <!-- Popup Components -->
+  <script src="src/popup/components/audio-player.js"></script>
+  <script src="src/popup/views/settings.js"></script>
+  <script src="src/popup/views/modals.js"></script>
+  
+  <!-- Main Popup Logic -->
   <script src="popup.js"></script>
 </body>
 </html>

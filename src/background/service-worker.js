@@ -4,7 +4,7 @@
  */
 
 // Import audio storage manager
-importScripts('audio-storage.js');
+importScripts('src/services/audio-storage.js');
 
 const STORAGE_KEY = 'sonara_data';
 const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';

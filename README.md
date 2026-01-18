@@ -1,155 +1,323 @@
-# <img src="assets/original logo.png" alt="Sonara Logo" width="32" height="32"> Sonara
+<p align="center">
+  <img src="assets/original logo.png" alt="Sonara Logo" width="80" height="80">
+</p>
 
-A Chrome extension that saves articles and reads them to you with AI-powered voices. Save any article, listen while you work, and never miss great content.
+<h1 align="center">Sonara</h1>
 
-<img src="assets/product/Article%20list.png" alt="Article List" width="600">
+<p align="center">
+  <strong>Save articles. Listen anywhere.</strong>
+  <br>
+  A Chrome extension that saves articles and reads them to you with AI-powered voices.
+</p>
 
-## ✨ Features
+<p align="center">
+  <img src="https://img.shields.io/badge/version-1.1.1-blue.svg" alt="Version">
+  <img src="https://img.shields.io/badge/manifest-v3-green.svg" alt="Manifest V3">
+  <img src="https://img.shields.io/badge/license-MIT-orange.svg" alt="License">
+  <img src="https://img.shields.io/badge/chrome-extension-yellow.svg" alt="Chrome Extension">
+</p>
 
-### 📚 Save & Organize Articles
-- **One-click save**: Save any article instantly
-- **Clean reading**: Automatically removes ads and clutter, shows clean formatted text
-- **Tags & search**: Organize with tags and find articles quickly
-- **Archive**: Mark articles as done to keep your list organized
-- **Edit content**: Edit article text and regenerate audio with your changes
-
-<img src="assets/product/Article%20view.png" alt="Article View" width="600">
-
-### 🎧 Listen to Articles
-- **AI voices**: High-quality text-to-speech using OpenAI (13 voice options)
-- **Auto-generates**: Audio creates automatically when you save articles
-- **Download audio**: Save audio files to listen offline
-- **Custom audio**: Create audio from any text, no webpage needed
-- **Background player**: Keep listening while browsing other pages
-
-### 📝 Highlights
-- **Save quotes**: Select and save important text from articles
-- **View all highlights**: See all your saved quotes in one place
-- **Quick access**: Jump back to any article from your highlights
-
-<img src="assets/product/Highlight.png" alt="Highlights" width="600">
-
-### 🔍 Find What You Need
-- **Search articles**: Search by title, URL, or tags
-- **Search in article**: Find specific text within any article
-- **Filter by status**: View new, all, or archived articles
-- **Filter by tags**: Quickly find articles by topic
-
-### 🎯 Smart Features
-- **Fullscreen reading**: Distraction-free reading mode
-- **Job logs**: Track audio generation progress with detailed logs
-- **Reprocess audio**: Regenerate audio anytime
-- **Cancel generation**: Stop audio generation if needed
-- **Export/Import data**: Transfer your articles, highlights, and settings between computers
-
-## 🚀 Quick Start
-
-1. **Install the extension**
-   - Download or clone this repository
-   - Open Chrome and go to `chrome://extensions/`
-   - Enable "Developer mode"
-   - Click "Load unpacked" and select the Sonara folder
-
-2. **Set up (optional)**
-   - Click the extension icon
-   - Open Settings (⚙ icon)
-   - Add your OpenAI API key for high-quality voices
-   - Get your key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-
-<img src="assets/product/Settings.png" alt="Settings" width="600">
-
-3. **Start using**
-   - Visit any article
-   - Click the extension icon
-   - Click "Save Current Page"
-   - Add tags if you want
-   - Click "Save"
-
-That's it! Audio will generate automatically. Click "Listen" when you're ready to hear it.
-
-## 📖 How to Use
-
-### Save an Article
-1. Visit any article on the web
-2. Click the Sonara extension icon
-3. Click "Save Current Page"
-4. Edit title and add tags (optional)
-5. Click "Save"
-
-### Listen to Articles
-- Click any article in your list, or click the "🎧 Listen" button
-- Use the player controls to play, pause, or seek
-- Download audio to listen offline
-
-### Create Custom Audio
-- Click the microphone icon (🎙️) in the header
-- Enter a title and paste your text
-- Click "Generate Audio"
-- Listen when ready
-
-### Highlight Text
-- Open any article
-- Select the text you want to save
-- Click "💾 Save Highlight"
-- View all highlights by clicking the 📑 icon
-
-### Search & Organize
-- **Search**: Type in the search box to find articles
-- **Filter**: Use dropdowns to filter by status or tags
-- **Edit tags**: Click "+ Edit Tags" on any article
-- **Archive**: Click "📦 Archive" when done reading
-- **Delete**: Click "Delete" to remove articles
-
-### Edit Articles
-- Open any article
-- Click the edit icon (✏️)
-- Make your changes
-- Click "Save & Regenerate Audio" to update the content and create new audio
-
-### Export & Import Data
-- **Export**: Open Settings (⚙ icon) and click "Export Data" to download all your articles, highlights, and settings as a JSON file
-- **Import**: Open Settings and click "Import Data" to restore your data from a previously exported JSON file
-- **Transfer between computers**: Export your data on one computer, then import it on another to transfer all your saved articles and highlights
-
-## 🔒 Privacy
-
-- **100% local**: All your data stays in your browser
-- **No tracking**: We don't collect any information
-- **Your data**: Everything is stored locally on your device
-- **Optional API**: Works without OpenAI (uses your browser's voice)
-
-## 🛠️ For Developers
-
-Built with vanilla JavaScript, no frameworks. Uses Chrome Storage API and IndexedDB for data. See the code for implementation details.
-
-## ⚠️ Known Issues
-
-- **Article parsing is basic**: Due to Chrome extension limitations, we cannot use third-party libraries for article extraction. The current parser uses simple heuristics to find article content, which may not work perfectly on all websites. Some complex sites may require manual content selection.
-
-- **Audio generation timeout**: Very long articles (over 10 minutes of audio) may timeout during generation. The system will auto-retry after 10 minutes if a timeout occurs.
-
-- **Browser TTS limitations**: When OpenAI API key is not configured, the extension uses browser's built-in TTS which has limited voice options and quality compared to OpenAI voices.
-
-- **Large audio files**: Very large audio files may take time to load or play, especially on slower connections.
-
-- **Search in complex HTML**: Article search may not work perfectly on articles with complex HTML structures or embedded content.
-
-## 📋 Todo
-
-- [ ] Improve article extraction with better heuristics
-- [ ] Add other TTS provider
-- [ ] Add support for more article formats
-- [ ] Chrome Sync for cross-device access
-- [ ] Keyboard shortcuts
-- [ ] Batch operations (delete multiple, archive multiple)
-- [ ] Reading statistics
-- [ ] Better error messages for article extraction failures
-- [ ] Support for PDF articles
-
-## 📝 License
-
-MIT License - See [LICENSE](LICENSE) file for details.
+<p align="center">
+  <img src="assets/product/Article%20list.png" alt="Sonara - Article List" width="700">
+</p>
 
 ---
 
-Made with ❤️ for readers who want to listen
+## Features
+
+### 📚 Save & Organize
+
+| Feature | Description |
+|---------|-------------|
+| **One-click save** | Save any article instantly from any website |
+| **Clean extraction** | Automatically removes ads, sidebars, and clutter |
+| **Tags** | Organize articles with custom tags |
+| **Search** | Find articles by title, URL, or tags |
+| **Archive** | Mark articles as done to keep your list tidy |
+| **Edit content** | Edit article text and regenerate audio |
+
+### 🎧 Listen with AI Voices
+
+<p align="center">
+  <img src="assets/product/Article%20view.png" alt="Article View with Audio Player" width="700">
+</p>
+
+| Feature | Description |
+|---------|-------------|
+| **13 AI voices** | High-quality OpenAI TTS voices (Alloy, Coral, Nova, etc.) |
+| **Auto-generate** | Audio creates automatically when you save |
+| **Background play** | Keep listening while browsing other tabs |
+| **Download audio** | Save MP3 files for offline listening |
+| **Custom audio** | Create audio from any text—no webpage needed |
+| **Playback speed** | Adjust speed from 0.5x to 2x |
+
+### 📝 Highlights
+
+<p align="center">
+  <img src="assets/product/Highlight.png" alt="Highlights Feature" width="700">
+</p>
+
+- **Save quotes**: Select and save important passages from articles
+- **All in one place**: View all your highlights across articles
+- **Quick access**: Jump back to any article from your highlights
+
+### ⚙️ Settings & Data
+
+<p align="center">
+  <img src="assets/product/Settings.png" alt="Settings Panel" width="500">
+</p>
+
+- **Voice selection**: Choose from 13 OpenAI voices
+- **Export/Import**: Transfer your data between computers
+- **Works offline**: Browser TTS fallback when API is unavailable
+
+---
+
+## Quick Start
+
+### 1. Install
+
+```bash
+# Clone or download this repository
+git clone https://github.com/your-username/Sonara.git
+```
+
+Then in Chrome:
+1. Go to `chrome://extensions/`
+2. Enable **Developer mode** (top right)
+3. Click **Load unpacked**
+4. Select the Sonara folder
+
+### 2. Setup (Optional)
+
+For high-quality AI voices:
+1. Click the Sonara extension icon
+2. Open Settings (⚙️ icon)
+3. Add your [OpenAI API key](https://platform.openai.com/api-keys)
+4. Choose your preferred voice
+
+> **Note:** Sonara works without an API key using your browser's built-in voices, but OpenAI voices sound significantly better.
+
+### 3. Save Your First Article
+
+1. Visit any article on the web
+2. Click the Sonara extension icon
+3. Click **Save Current Page**
+4. Add tags if you want
+5. Click **Save**
+
+Audio generates automatically. Click **Listen** when ready! 🎧
+
+---
+
+## Usage Guide
+
+### Saving Articles
+
+| Action | How |
+|--------|-----|
+| Save current page | Click extension → **Save Current Page** |
+| Add tags | Enter comma-separated tags when saving |
+| Edit tags later | Click **+ Edit Tags** on any article |
+
+### Listening
+
+| Action | How |
+|--------|-----|
+| Play article | Click **🎧 Listen** or click the article |
+| Controls | Play, Pause, Stop, Seek, Speed adjustment |
+| Background play | Audio continues when popup closes |
+| Download | Click download icon to save MP3 |
+
+### Creating Custom Audio
+
+1. Click the microphone icon (🎙️) in the header
+2. Enter a title and paste your text
+3. Click **Generate Audio**
+4. Listen when ready
+
+### Highlighting Text
+
+1. Open any saved article
+2. Select text you want to save
+3. Click **💾 Save Highlight**
+4. View all highlights via the 📑 icon
+
+### Organizing
+
+| Filter | Description |
+|--------|-------------|
+| **New** | Unread articles (default) |
+| **All** | Everything |
+| **Archived** | Articles you've finished |
+| **By Tag** | Filter by specific tag |
+
+### Export & Import
+
+**Export:** Settings → Export/Import tab → Export Data  
+**Import:** Settings → Export/Import tab → Choose File to Import
+
+Options:
+- Include/exclude audio files (can make exports 100MB+)
+- Include/exclude API key (not recommended for security)
+
+---
+
+## Privacy
+
+| | |
+|---|---|
+| 🔒 **100% Local** | All data stays in your browser |
+| 🚫 **No Tracking** | We don't collect any information |
+| 💾 **Your Data** | Everything stored locally on your device |
+| 🔑 **Optional API** | API key only used for OpenAI TTS requests |
+
+---
+
+## Technical Details
+
+### Architecture
+
+- **Manifest V3** Chrome extension
+- **Vanilla JavaScript** - No frameworks
+- **Chrome Storage API** - Settings and article metadata
+- **IndexedDB** - Large audio files (avoids Chrome storage quotas)
+- **Service Worker** - Background audio generation
+- **Offscreen Document** - Background audio playback
+
+### File Structure
+
+```
+Sonara/
+├── manifest.json              # Extension manifest (MV3)
+├── popup.html/js/css          # Main popup UI
+├── offscreen.html             # Background audio playback
+├── assets/
+│   └── icons/                 # Extension icons
+├── src/
+│   ├── background/
+│   │   └── service-worker.js  # Background service worker
+│   ├── content/
+│   │   └── article-extractor.js  # Content script for article extraction
+│   ├── offscreen/
+│   │   └── audio-player.js    # Offscreen audio player
+│   ├── popup/
+│   │   ├── components/        # Reusable UI components
+│   │   │   └── audio-player.js
+│   │   └── views/             # View handlers (settings, modals)
+│   │       ├── settings.js
+│   │       └── modals.js
+│   ├── services/              # Business logic & data layer
+│   │   ├── storage.js         # Chrome storage manager
+│   │   ├── audio-storage.js   # IndexedDB for audio files
+│   │   ├── highlights.js      # Highlights manager
+│   │   └── tts/
+│   │       ├── openai-tts.js  # OpenAI TTS API
+│   │       └── browser-tts.js # Browser TTS fallback
+│   └── utils/                 # Shared utilities
+│       ├── helpers.js         # Common helper functions
+│       └── markdown.js        # Markdown rendering
+└── docs/                      # Documentation
+```
+
+### API Usage
+
+When using OpenAI TTS:
+- Model: `gpt-4o-mini-tts`
+- Endpoint: `https://api.openai.com/v1/audio/speech`
+- Long articles are split into chunks (~4096 chars each)
+- Includes retry logic with exponential backoff
+
+---
+
+## Known Issues
+
+| Issue | Details |
+|-------|---------|
+| **Basic article parsing** | Some complex sites may not extract perfectly. Chrome extension limitations prevent using advanced parsing libraries. |
+| **Long article timeout** | Articles over ~10 minutes of audio may timeout. Auto-retries after 10 minutes. |
+| **Browser TTS quality** | Without OpenAI API key, browser voices are lower quality. |
+| **Large audio files** | Very large files may load slowly. |
+
+---
+
+## Roadmap
+
+- [ ] Improved article extraction
+- [ ] Additional TTS providers (ElevenLabs, etc.)
+- [ ] Chrome Sync for cross-device access
+- [ ] Keyboard shortcuts
+- [ ] Batch operations (delete/archive multiple)
+- [ ] Reading statistics
+- [ ] PDF support
+- [ ] Better error messages
+
+---
+
+## Contributing
+
+We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+```bash
+# Quick start for contributors
+git clone https://github.com/your-username/Sonara.git
+cd Sonara
+# Load extension in Chrome (see install instructions)
+# Make changes and test
+```
+
+---
+
+## FAQ
+
+<details>
+<summary><strong>Do I need an OpenAI API key?</strong></summary>
+
+No! Sonara works with your browser's built-in text-to-speech. However, OpenAI voices sound much more natural. Get a key at [platform.openai.com](https://platform.openai.com/api-keys).
+</details>
+
+<details>
+<summary><strong>How much does the OpenAI API cost?</strong></summary>
+
+OpenAI TTS is very affordable. A typical article (5-10 minutes of audio) costs about $0.01-0.03. Check [OpenAI pricing](https://openai.com/pricing) for current rates.
+</details>
+
+<details>
+<summary><strong>Why isn't the article extracting correctly?</strong></summary>
+
+Some sites have complex layouts that confuse the extractor. You can edit the article content after saving to fix any issues.
+</details>
+
+<details>
+<summary><strong>Can I use this on Firefox/Safari?</strong></summary>
+
+Currently Chrome only. Firefox support may come in the future.
+</details>
+
+<details>
+<summary><strong>Where is my data stored?</strong></summary>
+
+Everything is stored locally in your browser using Chrome Storage API and IndexedDB. Nothing is sent to any server (except OpenAI when generating audio).
+</details>
+
+<details>
+<summary><strong>How do I transfer my articles to another computer?</strong></summary>
+
+Use the Export/Import feature in Settings. Export creates a JSON file you can import on another computer.
+</details>
+
+---
+
+## License
+
+MIT License - See [LICENSE](LICENSE) for details.
+
+---
+
+<p align="center">
+  Made with ❤️ for readers who want to listen
+  <br><br>
+  <a href="CHANGELOG.md">Changelog</a> · 
+  <a href="CONTRIBUTING.md">Contributing</a> · 
+  <a href="docs/QUICKSTART.md">Quick Start Guide</a>
+</p>
