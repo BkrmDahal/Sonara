@@ -21,7 +21,6 @@ A Chrome extension that saves articles and reads them to you with AI-powered voi
 - **Download audio**: Save audio files to listen offline
 - **Custom audio**: Create audio from any text, no webpage needed
 - **Background player**: Keep listening while browsing other pages
-- **Auto-play**: Option to automatically start playing when audio is ready
 
 ### 📝 Highlights
 - **Save quotes**: Select and save important text from articles
@@ -41,6 +40,7 @@ A Chrome extension that saves articles and reads them to you with AI-powered voi
 - **Job logs**: Track audio generation progress with detailed logs
 - **Reprocess audio**: Regenerate audio anytime
 - **Cancel generation**: Stop audio generation if needed
+- **Export/Import data**: Transfer your articles, highlights, and settings between computers
 
 ## 🚀 Quick Start
 
@@ -78,7 +78,6 @@ That's it! Audio will generate automatically. Click "Listen" when you're ready t
 
 ### Listen to Articles
 - Click any article in your list, or click the "🎧 Listen" button
-- If audio is ready, it plays automatically (if auto-play is enabled)
 - Use the player controls to play, pause, or seek
 - Download audio to listen offline
 
@@ -107,6 +106,11 @@ That's it! Audio will generate automatically. Click "Listen" when you're ready t
 - Make your changes
 - Click "Save & Regenerate Audio" to update the content and create new audio
 
+### Export & Import Data
+- **Export**: Open Settings (⚙ icon) and click "Export Data" to download all your articles, highlights, and settings as a JSON file
+- **Import**: Open Settings and click "Import Data" to restore your data from a previously exported JSON file
+- **Transfer between computers**: Export your data on one computer, then import it on another to transfer all your saved articles and highlights
+
 ## 🔒 Privacy
 
 - **100% local**: All your data stays in your browser
@@ -133,9 +137,9 @@ Built with vanilla JavaScript, no frameworks. Uses Chrome Storage API and Indexe
 ## 📋 Todo
 
 - [ ] Improve article extraction with better heuristics
+- [ ] Add other TTS provider
 - [ ] Add support for more article formats
 - [ ] Chrome Sync for cross-device access
-- [ ] Export/Import bookmarks (JSON)
 - [ ] Keyboard shortcuts
 - [ ] Batch operations (delete multiple, archive multiple)
 - [ ] Reading statistics

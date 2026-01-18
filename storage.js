@@ -14,8 +14,7 @@ class StorageManager {
         ttsSpeed: 1.0,
         autoExtract: true,
         openaiApiKey: '',
-        openaiVoice: 'coral',
-        autoPlayAudio: false
+        openaiVoice: 'coral'
       },
       jobLogs: []
     };

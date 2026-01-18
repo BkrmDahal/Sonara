@@ -42,6 +42,109 @@ chrome.runtime.onInstalled.addListener(() => {
   // Extension installed
 });
 
+// Manage offscreen document for background audio playback
+let offscreenDocumentId = null;
+
+async function ensureOffscreenDocument() {
+  // Check if offscreen document already exists
+  const clients = await chrome.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT']
+  });
+  
+  if (clients.length > 0) {
+    offscreenDocumentId = clients[0].contextId;
+    return;
+  }
+  
+  // Create offscreen document
+  try {
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: ['DOM_SCRAPING'],
+      justification: 'Background audio playback'
+    });
+    console.log('Offscreen document created for audio playback');
+  } catch (error) {
+    console.error('Failed to create offscreen document:', error);
+  }
+}
+
+// Listen for audio control messages from popup (this runs first)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Handle audio control messages (forward to offscreen)
+  if (message.type === 'LOAD_AUDIO' || message.type === 'PLAY_AUDIO' || message.type === 'AUDIO_PAUSE' || 
+      message.type === 'AUDIO_STOP' || message.type === 'AUDIO_RESUME' ||
+      message.type === 'AUDIO_SEEK' || message.type === 'AUDIO_SET_RATE' ||
+      message.type === 'GET_AUDIO_STATE') {
+    handleAudioControl(message, sendResponse);
+    return true; // Keep channel open for async
+  }
+  
+  // Forward state updates from offscreen to popup
+  if (message.type === 'AUDIO_STATE_UPDATE' || message.type === 'AUDIO_TIME_UPDATE' || 
+      message.type === 'AUDIO_PLAYING') {
+    // Broadcast to all popup instances (they will listen for these)
+    // Don't send response, just broadcast
+    return false;
+  }
+  
+  // Let other message types pass through to other listeners
+  return false;
+});
+
+async function handleAudioControl(message, sendResponse) {
+  try {
+    await ensureOffscreenDocument();
+    
+    // Verify offscreen document exists
+    const clients = await chrome.runtime.getContexts({
+      contextTypes: ['OFFSCREEN_DOCUMENT']
+    });
+    
+    if (clients.length === 0) {
+      if (sendResponse) {
+        sendResponse({ success: false, error: 'Offscreen document not available' });
+      }
+      return false;
+    }
+    
+    // Send message to offscreen and wait for response
+    // Use Promise-based approach for better error handling
+    try {
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(message, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+          } else {
+            resolve(response || { success: false, error: 'No response from offscreen' });
+          }
+        });
+      });
+      
+      // Forward response to popup
+      if (sendResponse) {
+        sendResponse(response);
+      }
+      return true;
+    } catch (error) {
+      console.error('Error communicating with offscreen:', error);
+      if (sendResponse) {
+        sendResponse({ success: false, error: error.message });
+      }
+      return false;
+    }
+  } catch (error) {
+    console.error('Error handling audio control:', error);
+    if (sendResponse) {
+      sendResponse({ success: false, error: error.message });
+    }
+    return false;
+  }
+}
+
+// Initialize offscreen document on startup
+ensureOffscreenDocument();
+
 function getData() {
   return new Promise((resolve) => {
     chrome.storage.local.get([STORAGE_KEY], (r) => {

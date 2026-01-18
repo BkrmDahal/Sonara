@@ -21,8 +21,106 @@ document.addEventListener('DOMContentLoaded', async () => {
       loadBookmarks();
       refreshListenModalIfOpen(msg.bookmarkId);
     }
+    // Listen for audio state updates from offscreen document
+    if (msg.type === 'AUDIO_STATE_UPDATE' || msg.type === 'AUDIO_TIME_UPDATE') {
+      updateAudioUIFromOffscreen(msg);
+    }
+    if (msg.type === 'AUDIO_PLAYING') {
+      showBottomAudioPlayer();
+      updateBottomAudioPlayer();
+    }
   });
+  
+  // Store current playing bookmark for UI updates
+  window.currentPlayingBookmarkId = null;
+  
+  // Check if audio is already playing on initialization
+  checkAndShowPlayingAudio();
+  
+  // Periodically update UI from offscreen audio (every second when playing)
+  setInterval(async () => {
+    // Always check for playing audio, even if we don't have currentPlayingBookmarkId
+    try {
+      const stateResponse = await chrome.runtime.sendMessage({
+        type: 'GET_AUDIO_STATE'
+      });
+      if (stateResponse && stateResponse.success && stateResponse.state) {
+        const state = stateResponse.state;
+        if (state.bookmarkId) {
+          // Update current playing bookmark ID if we don't have it
+          if (!window.currentPlayingBookmarkId || window.currentPlayingBookmarkId !== state.bookmarkId) {
+            window.currentPlayingBookmarkId = state.bookmarkId;
+            // Update bottom player info
+            storageManager.getBookmarks().then(bookmarks => {
+              const bookmark = bookmarks.find(b => b.id === state.bookmarkId);
+              if (bookmark) {
+                updateBottomAudioPlayerInfo(bookmark);
+              }
+            });
+          }
+          
+          // Always show bottom player if audio is loaded/playing
+          showBottomAudioPlayer();
+          
+          // Update UI with current time and duration
+          updateBottomAudioPlayer();
+          updateModalAudioControls();
+          
+          // Also send update message for consistency
+          updateAudioUIFromOffscreen({
+            bookmarkId: state.bookmarkId,
+            currentTime: state.currentTime,
+            duration: state.duration,
+            state: state.playing ? 'playing' : 'paused'
+          });
+        }
+      }
+    } catch (error) {
+      // Ignore errors if offscreen is not available
+    }
+  }, 500); // Update more frequently for smoother time display
 });
+
+// Check if audio is playing and show bottom player
+async function checkAndShowPlayingAudio() {
+  try {
+    // Try to get audio state from offscreen
+    const stateResponse = await chrome.runtime.sendMessage({
+      type: 'GET_AUDIO_STATE'
+    });
+    
+    if (stateResponse && stateResponse.success && stateResponse.state) {
+      const state = stateResponse.state;
+      
+      // Show player if audio is loaded (playing or paused)
+      if (state.bookmarkId) {
+        window.currentPlayingBookmarkId = state.bookmarkId;
+        
+        // Find the bookmark to show title
+        const bookmarks = await storageManager.getBookmarks();
+        const bookmark = bookmarks.find(b => b.id === state.bookmarkId);
+        
+        if (bookmark) {
+          updateBottomAudioPlayerInfo(bookmark);
+          
+          // Force show the player
+          const bottomPlayer = document.getElementById('bottomAudioPlayer');
+          if (bottomPlayer) {
+            bottomPlayer.style.display = 'flex';
+            bottomPlayer.style.visibility = 'visible';
+            bottomPlayer.style.opacity = '1';
+          }
+          
+          updateBottomAudioPlayer();
+          console.log('Found audio in offscreen (playing or paused):', state.bookmarkId);
+        }
+      }
+    }
+  } catch (error) {
+    // Ignore if offscreen not available or no audio playing
+    console.log('No audio in offscreen or offscreen not available');
+  }
+}
 
 // Setup event listeners
 function setupEventListeners() {
@@ -54,6 +152,29 @@ function setupEventListeners() {
   document.getElementById('closeSettingsModal').addEventListener('click', closeSettingsModal);
   document.getElementById('saveSettingsBtn').addEventListener('click', handleSaveSettings);
   document.getElementById('cancelSettingsBtn').addEventListener('click', closeSettingsModal);
+  
+  // Export/Import (now in settings)
+  document.getElementById('exportDataBtn').addEventListener('click', handleExportData);
+  document.getElementById('importDataBtn').addEventListener('click', () => {
+    document.getElementById('importFileInput').click();
+  });
+  document.getElementById('importFileInput').addEventListener('change', handleImportFileSelect);
+  document.getElementById('confirmImportBtn').addEventListener('click', handleConfirmImport);
+  document.getElementById('cancelImportBtn').addEventListener('click', closeImportConfirmModal);
+  document.getElementById('closeImportConfirmModal').addEventListener('click', closeImportConfirmModal);
+  
+  // Settings tab switching
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const tabName = tab.getAttribute('data-tab');
+      switchSettingsTab(tabName);
+    });
+  });
+  
+  // Close import confirm modal on outside click
+  document.getElementById('importConfirmModal').addEventListener('click', (e) => {
+    if (e.target.id === 'importConfirmModal') closeImportConfirmModal();
+  });
   
   // Modal close buttons
   document.getElementById('closeModal').addEventListener('click', closeBookmarkModal);
@@ -186,28 +307,100 @@ function setupEventListeners() {
   
   // Audio player
   const audioPlayer = document.getElementById('audioPlayer');
+  
+  // Update bottom player from offscreen audio (not local player)
+  // Local player is just for UI, offscreen handles actual playback
   audioPlayer.addEventListener('timeupdate', () => {
-    updateAudioTime();
-    updateBottomAudioPlayer();
+    // Only update if not using offscreen (fallback mode)
+    if (!window.currentPlayingBookmarkId) {
+      updateBottomAudioPlayer();
+    }
   });
+  
   audioPlayer.addEventListener('loadedmetadata', () => {
-    updateAudioTime();
-    updateBottomAudioPlayer();
+    // Only update if not using offscreen (fallback mode)
+    if (!window.currentPlayingBookmarkId) {
+      updateBottomAudioPlayer();
+    }
   });
-  audioPlayer.addEventListener('play', () => {
-    showBottomAudioPlayer();
-    updateBottomAudioPlayer();
+  
+  // Prevent any local playback when using offscreen
+  // The audio element is only for duration calculation, not playback
+  audioPlayer.addEventListener('play', async (e) => {
+    // If audio is loaded in offscreen, prevent local playback
+    if (window.currentPlayingBookmarkId) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      audioPlayer.pause();
+      audioPlayer.currentTime = 0;
+      
+      // Play in offscreen instead
+      try {
+        await playAudioInOffscreen(window.currentPlayingBookmarkId);
+        showBottomAudioPlayer();
+        updateBottomAudioPlayer();
+      } catch (error) {
+        console.error('Error playing audio in offscreen:', error);
+        // Don't fallback to local - offscreen should work
+      }
+    } else {
+      // No offscreen audio, allow local playback
+      showBottomAudioPlayer();
+      updateBottomAudioPlayer();
+    }
   });
+  
+  // Also prevent any attempts to play locally when offscreen is active
+  audioPlayer.addEventListener('click', (e) => {
+    if (window.currentPlayingBookmarkId) {
+      // If user clicks on audio element, use bottom player instead
+      e.preventDefault();
+      e.stopPropagation();
+      toggleBottomAudioPlayPause();
+    }
+  }, true); // Use capture phase to intercept early
+  
   audioPlayer.addEventListener('pause', () => {
+    // Don't pause offscreen audio when local player pauses
+    // Offscreen audio should continue playing independently
+    // Only update UI
     updateBottomAudioPlayer();
   });
+  
   audioPlayer.addEventListener('ended', () => {
-    hideBottomAudioPlayer();
+    // Don't hide bottom player when audio ends - keep it visible
+    // User can see what finished and can restart if needed
+    updateBottomAudioPlayer();
   });
   
   // Bottom audio player controls
   document.getElementById('bottomPlayPauseBtn').addEventListener('click', toggleBottomAudioPlayPause);
   document.getElementById('bottomStopBtn').addEventListener('click', stopBottomAudio);
+  
+  // Modal audio player controls
+  const modalPlayPauseBtn = document.getElementById('modalPlayPauseBtn');
+  const modalStopBtn = document.getElementById('modalStopBtn');
+  if (modalPlayPauseBtn) {
+    modalPlayPauseBtn.addEventListener('click', async () => {
+      if (window.currentPlayingBookmarkId) {
+        await toggleBottomAudioPlayPause();
+        updateModalAudioControls();
+      } else if (window.currentTTSBookmark) {
+        // Start playing the current bookmark
+        await playAudioInOffscreen(window.currentTTSBookmark.id);
+        window.currentPlayingBookmarkId = window.currentTTSBookmark.id;
+        updateModalAudioControls();
+      }
+    });
+  }
+  if (modalStopBtn) {
+    modalStopBtn.addEventListener('click', async () => {
+      await stopBottomAudio();
+      updateModalAudioControls();
+      // Also update bottom player
+      updateBottomAudioPlayer();
+    });
+  }
   
   // TTS controls
   document.getElementById('playBtn').addEventListener('click', handlePlayTTS);
@@ -743,50 +936,120 @@ async function handleListen(bookmarkId) {
     }
 
     if (audioData) {
-      const audioBlob = new Blob([Uint8Array.from(atob(audioData), c => c.charCodeAt(0))], { type: mimeType });
-      const audioUrl = URL.createObjectURL(audioBlob);
-      
-      const audioPlayer = document.getElementById('audioPlayer');
-      audioPlayer.src = audioUrl;
-      
-      // Update bottom player with new audio info
-      updateBottomAudioPlayerInfo(bookmark);
-      
-      // Calculate and save duration if not already set
-      if (!bookmark.audioDuration) {
-        audioPlayer.addEventListener('loadedmetadata', async () => {
-          const duration = audioPlayer.duration;
-          if (duration && !isNaN(duration) && duration > 0) {
-            bookmark.audioDuration = duration;
-            await storageManager.saveBookmark(bookmark);
-            await loadBookmarks(); // Refresh to show duration
-            updateBottomAudioPlayer();
+      // Load audio in offscreen document (but don't play - user must click play)
+      try {
+        // Check if audio is currently playing BEFORE loading new audio
+        let isCurrentlyPlaying = false;
+        let currentlyPlayingBookmarkId = null;
+        
+        if (window.currentPlayingBookmarkId) {
+          try {
+            const currentState = await chrome.runtime.sendMessage({
+              type: 'GET_AUDIO_STATE'
+            });
+            if (currentState && currentState.success && currentState.state) {
+              if (currentState.state.playing && currentState.state.bookmarkId) {
+                isCurrentlyPlaying = true;
+                currentlyPlayingBookmarkId = currentState.state.bookmarkId;
+              }
+            }
+          } catch (error) {
+            // Ignore errors
           }
-        }, { once: true });
-      }
-      
-      playerEl.style.display = 'block';
-      generatingEl.style.display = 'none';
-      errorEl.style.display = 'none';
-      ttsEl.style.display = 'none';
-      bookmark.audioUrl = audioUrl;
-      
-      // Auto-play if setting is enabled
-      const settings = await storageManager.getSettings();
-      if (settings.autoPlayAudio) {
-        audioPlayer.addEventListener('loadeddata', () => {
-          audioPlayer.play().catch(err => {
-            console.log('Auto-play prevented by browser:', err);
-            // Auto-play was prevented (browser policy), user will need to click play
-          });
-        }, { once: true });
-      }
-      
-      // Show bottom audio player when audio starts playing
-      audioPlayer.addEventListener('play', () => {
+        }
+        
+        // Only load new audio if:
+        // 1. No audio is currently playing, OR
+        // 2. This is the same article that's already loaded
+        if (!isCurrentlyPlaying || currentlyPlayingBookmarkId === bookmarkId) {
+          // Safe to load - no audio playing or same article
+          await loadAudioInOffscreen(bookmarkId, audioData, mimeType, bookmark.title);
+          updateBottomAudioPlayerInfo(bookmark);
+          window.currentPlayingBookmarkId = bookmarkId;
+        } else {
+          // Different article is playing - DON'T load new audio yet
+          // This prevents stopping current playback
+          // Audio will be loaded when user clicks play
+          console.log('Audio is playing for different article (', currentlyPlayingBookmarkId, '), not loading new audio for:', bookmarkId);
+          console.log('New audio will be loaded when user clicks play');
+          // Don't change currentPlayingBookmarkId - keep the playing one
+          // But still set up local player for UI
+        }
+        
+        // Also set up local player for UI (hidden, just for duration calculation)
+        const audioBlob = new Blob([Uint8Array.from(atob(audioData), c => c.charCodeAt(0))], { type: mimeType });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audioPlayer = document.getElementById('audioPlayer');
+        audioPlayer.src = audioUrl;
+        
+        // Disable native controls when using offscreen - use bottom player instead
+        // This prevents local playback and ensures offscreen handles it
+        audioPlayer.controls = false;
+        audioPlayer.removeAttribute('controls');
+        
+        // Calculate and save duration if not already set
+        if (!bookmark.audioDuration) {
+          audioPlayer.addEventListener('loadedmetadata', async () => {
+            const duration = audioPlayer.duration;
+            if (duration && !isNaN(duration) && duration > 0) {
+              bookmark.audioDuration = duration;
+              await storageManager.saveBookmark(bookmark);
+              await loadBookmarks(); // Refresh to show duration
+              updateBottomAudioPlayer();
+            }
+          }, { once: true });
+        }
+        
+        playerEl.style.display = 'block';
+        generatingEl.style.display = 'none';
+        errorEl.style.display = 'none';
+        ttsEl.style.display = 'none';
+        bookmark.audioUrl = audioUrl;
+        
+        // Don't auto-play when opening article - user must click play
+        // Always show bottom audio player when audio is loaded (even if not playing)
+        console.log('Audio loaded, showing bottom player for bookmark:', bookmarkId);
+        
+        // Force show the player immediately
+        const bottomPlayer = document.getElementById('bottomAudioPlayer');
+        if (bottomPlayer) {
+          bottomPlayer.style.display = 'flex';
+          bottomPlayer.style.visibility = 'visible';
+          bottomPlayer.style.opacity = '1';
+        }
+        
         showBottomAudioPlayer();
         updateBottomAudioPlayer();
-      }, { once: true });
+        updateModalAudioControls();
+        
+        // Force show the player after a short delay to ensure it's visible
+        setTimeout(() => {
+          if (bottomPlayer) {
+            bottomPlayer.style.display = 'flex';
+            bottomPlayer.style.visibility = 'visible';
+            bottomPlayer.style.opacity = '1';
+            console.log('Bottom player forced visible');
+          }
+          updateBottomAudioPlayer();
+          updateModalAudioControls();
+        }, 200);
+      } catch (error) {
+        console.error('Error loading audio in offscreen:', error);
+        // Fallback to local player
+        const audioBlob = new Blob([Uint8Array.from(atob(audioData), c => c.charCodeAt(0))], { type: mimeType });
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const audioPlayer = document.getElementById('audioPlayer');
+        audioPlayer.src = audioUrl;
+        bookmark.audioUrl = audioUrl;
+        playerEl.style.display = 'block';
+        generatingEl.style.display = 'none';
+        errorEl.style.display = 'none';
+        ttsEl.style.display = 'none';
+        
+        // Don't auto-play - user must click play
+        showBottomAudioPlayer();
+        updateBottomAudioPlayer();
+      }
     } else if (bookmark.audioStatus === 'generating') {
       playerEl.style.display = 'none';
       generatingEl.style.display = 'flex';
@@ -955,10 +1218,8 @@ async function loadSettingsIntoUI() {
   const settings = await storageManager.getSettings();
   const keyInput = document.getElementById('openaiApiKey');
   const voiceSelect = document.getElementById('openaiVoiceSelect');
-  const autoPlayCheckbox = document.getElementById('autoPlayAudio');
   if (keyInput) keyInput.value = settings.openaiApiKey || '';
   if (voiceSelect) voiceSelect.value = settings.openaiVoice || 'coral';
-  if (autoPlayCheckbox) autoPlayCheckbox.checked = settings.autoPlayAudio || false;
   
   const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
   const voices = ['alloy','ash','ballad','coral','echo','fable','nova','onyx','sage','shimmer','verse','marin','cedar'];
@@ -971,6 +1232,8 @@ async function loadSettingsIntoUI() {
 
 function openSettingsModal() {
   loadSettingsIntoUI();
+  // Switch to General tab by default
+  switchSettingsTab('general');
   document.getElementById('settingsModal').classList.add('active');
 }
 
@@ -981,9 +1244,438 @@ function closeSettingsModal() {
 async function handleSaveSettings() {
   const apiKey = document.getElementById('openaiApiKey').value.trim();
   const voice = document.getElementById('openaiVoiceSelect').value;
-  const autoPlayAudio = document.getElementById('autoPlayAudio').checked;
-  await storageManager.saveSettings({ openaiApiKey: apiKey, openaiVoice: voice, autoPlayAudio: autoPlayAudio });
+  await storageManager.saveSettings({ openaiApiKey: apiKey, openaiVoice: voice });
   closeSettingsModal();
+}
+
+// ==================== Export/Import Functions ====================
+
+/**
+ * Switch between settings tabs
+ */
+function switchSettingsTab(tabName) {
+  // Update tab buttons
+  document.querySelectorAll('.settings-tab').forEach(tab => {
+    if (tab.getAttribute('data-tab') === tabName) {
+      tab.classList.add('active');
+    } else {
+      tab.classList.remove('active');
+    }
+  });
+  
+  // Update tab content
+  document.querySelectorAll('.settings-tab-content').forEach(content => {
+    content.classList.remove('active');
+  });
+  
+  if (tabName === 'general') {
+    document.getElementById('generalSettingsTab').classList.add('active');
+  } else if (tabName === 'export-import') {
+    document.getElementById('exportImportSettingsTab').classList.add('active');
+  }
+}
+
+/**
+ * Get all audio files from IndexedDB
+ */
+async function getAllAudioFiles() {
+  try {
+    const db = audioStorageManager.db || await audioStorageManager.init();
+    if (!db) return [];
+    
+    return new Promise((resolve, reject) => {
+      const transaction = db.transaction([audioStorageManager.storeName], 'readonly');
+      const store = transaction.objectStore(audioStorageManager.storeName);
+      const request = store.getAll();
+      
+      request.onsuccess = () => {
+        resolve(request.result || []);
+      };
+      request.onerror = () => {
+        console.error('Error getting all audio files:', request.error);
+        reject(request.error);
+      };
+    });
+  } catch (error) {
+    console.error('Failed to get all audio files:', error);
+    return [];
+  }
+}
+
+/**
+ * Export all data to JSON file
+ */
+async function handleExportData() {
+  try {
+    const includeAudio = document.getElementById('exportIncludeAudio').checked;
+    const includeApiKey = document.getElementById('exportIncludeApiKey').checked;
+    
+    // Show loading state
+    const exportBtn = document.getElementById('exportDataBtn');
+    const originalText = exportBtn.textContent;
+    exportBtn.disabled = true;
+    exportBtn.textContent = 'Exporting...';
+    
+    // Get all data
+    const data = await storageManager.getAllData();
+    const bookmarks = data.bookmarks || [];
+    const tags = data.tags || [];
+    let settings = { ...data.settings } || {};
+    
+    // Remove API key if not included
+    if (!includeApiKey && settings.openaiApiKey) {
+      settings.openaiApiKey = '';
+    }
+    
+    // Get highlights
+    const highlights = await highlightsManager.getAllHighlights();
+    
+    // Get audio files if requested
+    let audioFiles = [];
+    if (includeAudio) {
+      try {
+        audioFiles = await getAllAudioFiles();
+      } catch (error) {
+        console.error('Error getting audio files:', error);
+        // Continue without audio files
+      }
+    }
+    
+    // Build export object
+    const exportData = {
+      version: '1.0.0',
+      exportDate: new Date().toISOString(),
+      data: {
+        bookmarks: bookmarks,
+        tags: tags,
+        settings: settings,
+        highlights: highlights,
+        audioFiles: audioFiles
+      },
+      metadata: {
+        bookmarkCount: bookmarks.length,
+        highlightCount: highlights.length,
+        audioFileCount: audioFiles.length,
+        includesAudio: includeAudio,
+        includesApiKey: includeApiKey
+      }
+    };
+    
+    // Convert to JSON
+    const jsonString = JSON.stringify(exportData, null, 2);
+    const blob = new Blob([jsonString], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    
+    // Create download link
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `sonara-export-${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    // Reset button
+    exportBtn.disabled = false;
+    exportBtn.textContent = originalText;
+    
+    // Show success message
+    const fileSize = (blob.size / 1024 / 1024).toFixed(2);
+    alert(`Export successful!\n\nFile size: ${fileSize} MB\nBookmarks: ${bookmarks.length}\nHighlights: ${highlights.length}\nAudio files: ${audioFiles.length}`);
+    
+  } catch (error) {
+    console.error('Export failed:', error);
+    alert('Export failed: ' + error.message);
+    const exportBtn = document.getElementById('exportDataBtn');
+    exportBtn.disabled = false;
+    exportBtn.textContent = '📥 Export Data';
+  }
+}
+
+/**
+ * Handle file selection for import
+ */
+async function handleImportFileSelect(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  
+  // Reset file input
+  event.target.value = '';
+  
+  try {
+    const text = await file.text();
+    const importData = JSON.parse(text);
+    
+    // Validate import data
+    if (!importData.version || !importData.data) {
+      throw new Error('Invalid export file format');
+    }
+    
+    // Show preview and confirmation modal
+    showImportPreview(importData);
+    document.getElementById('importConfirmModal').classList.add('active');
+    
+    // Store import data temporarily
+    window.pendingImportData = importData;
+    
+  } catch (error) {
+    console.error('Import file read failed:', error);
+    alert('Failed to read import file: ' + error.message);
+  }
+}
+
+/**
+ * Show import preview
+ */
+function showImportPreview(importData) {
+  const preview = document.getElementById('importPreview');
+  const data = importData.data || {};
+  const metadata = importData.metadata || {};
+  
+  const bookmarkCount = data.bookmarks?.length || 0;
+  const highlightCount = data.highlights?.length || 0;
+  const audioFileCount = data.audioFiles?.length || 0;
+  const tagCount = data.tags?.length || 0;
+  
+  preview.innerHTML = `
+    <div style="font-weight: 600; margin-bottom: 10px;">Import Preview:</div>
+    <div style="line-height: 1.8;">
+      <div>📚 <strong>Bookmarks:</strong> ${bookmarkCount}</div>
+      <div>🏷️ <strong>Tags:</strong> ${tagCount}</div>
+      <div>📑 <strong>Highlights:</strong> ${highlightCount}</div>
+      <div>🎵 <strong>Audio files:</strong> ${audioFileCount}</div>
+      ${importData.exportDate ? `<div style="margin-top: 8px; font-size: 12px; color: #6b7280;">Exported: ${new Date(importData.exportDate).toLocaleString()}</div>` : ''}
+    </div>
+  `;
+  
+  // Update warning based on mode
+  const importMode = document.getElementById('importMode');
+  updateImportWarning(importMode.value);
+  
+  // Update warning when mode changes
+  importMode.addEventListener('change', () => {
+    updateImportWarning(importMode.value);
+  });
+}
+
+/**
+ * Update import warning message
+ */
+function updateImportWarning(mode) {
+  const warning = document.getElementById('importWarning');
+  if (mode === 'replace') {
+    warning.textContent = '⚠️ Warning: This will delete all your existing data and replace it with the imported data.';
+  } else {
+    warning.textContent = 'ℹ️ This will merge imported data with your existing data. Duplicates will be handled automatically.';
+    warning.style.color = '#1976d2';
+  }
+}
+
+/**
+ * Close import confirmation modal
+ */
+function closeImportConfirmModal() {
+  document.getElementById('importConfirmModal').classList.remove('active');
+  window.pendingImportData = null;
+}
+
+/**
+ * Handle confirmed import
+ */
+async function handleConfirmImport() {
+  if (!window.pendingImportData) {
+    alert('No import data available');
+    return;
+  }
+  
+  const importMode = document.getElementById('importMode').value;
+  const importData = window.pendingImportData;
+  const data = importData.data || {};
+  
+  try {
+    // Show loading
+    const confirmBtn = document.getElementById('confirmImportBtn');
+    const originalText = confirmBtn.textContent;
+    confirmBtn.disabled = true;
+    confirmBtn.textContent = 'Importing...';
+    
+    if (importMode === 'replace') {
+      // Replace mode: Clear existing data and import new
+      await replaceData(data);
+    } else {
+      // Merge mode: Merge with existing data
+      await mergeData(data);
+    }
+    
+    // Reset button
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = originalText;
+    
+    // Close modals
+    closeImportConfirmModal();
+    closeSettingsModal();
+    
+    // Reload UI
+    await loadBookmarks();
+    await loadTags();
+    
+    // Show success
+    alert('Import successful! Your data has been imported.');
+    
+  } catch (error) {
+    console.error('Import failed:', error);
+    alert('Import failed: ' + error.message);
+    const confirmBtn = document.getElementById('confirmImportBtn');
+    confirmBtn.disabled = false;
+    confirmBtn.textContent = 'Import';
+  }
+}
+
+/**
+ * Replace all existing data with imported data
+ */
+async function replaceData(importData) {
+  // Get existing data structure
+  const existingData = await storageManager.getAllData();
+  
+  // Replace bookmarks, tags, and settings
+  const newData = {
+    bookmarks: importData.bookmarks || [],
+    tags: importData.tags || [],
+    settings: { ...existingData.settings, ...(importData.settings || {}) }, // Merge settings to keep any new defaults
+    jobLogs: existingData.jobLogs || [] // Keep job logs
+  };
+  
+  // If imported settings has API key, use it (unless it was empty in export)
+  if (importData.settings?.openaiApiKey) {
+    newData.settings.openaiApiKey = importData.settings.openaiApiKey;
+  }
+  
+  // Save to Chrome Storage
+  await storageManager.saveAllData(newData);
+  
+  // Replace highlights
+  if (importData.highlights && Array.isArray(importData.highlights)) {
+    // Clear existing highlights
+    const allHighlights = await highlightsManager.getAllHighlights();
+    for (const highlight of allHighlights) {
+      await highlightsManager.deleteHighlight(highlight.id);
+    }
+    
+    // Add imported highlights (IDs will be regenerated)
+    for (const highlight of importData.highlights) {
+      await highlightsManager.saveHighlight(
+        highlight.bookmarkId,
+        highlight.text,
+        highlight.comment || '',
+        highlight.context || ''
+      );
+    }
+  }
+  
+  // Replace audio files
+  if (importData.audioFiles && Array.isArray(importData.audioFiles)) {
+    // Clear existing audio files
+    const db = audioStorageManager.db || await audioStorageManager.init();
+    const transaction = db.transaction([audioStorageManager.storeName], 'readwrite');
+    const store = transaction.objectStore(audioStorageManager.storeName);
+    const clearRequest = store.clear();
+    
+    await new Promise((resolve, reject) => {
+      clearRequest.onsuccess = () => resolve();
+      clearRequest.onerror = () => reject(clearRequest.error);
+    });
+    
+    // Add imported audio files
+    for (const audioFile of importData.audioFiles) {
+      await audioStorageManager.saveAudio(
+        audioFile.bookmarkId,
+        audioFile.base64Audio,
+        audioFile.mimeType || 'audio/mpeg'
+      );
+    }
+  }
+}
+
+/**
+ * Merge imported data with existing data
+ */
+async function mergeData(importData) {
+  const existingData = await storageManager.getAllData();
+  const existingBookmarks = existingData.bookmarks || [];
+  const existingTags = existingData.tags || [];
+  const importedBookmarks = importData.bookmarks || [];
+  const importedTags = importData.tags || [];
+  
+  // Merge bookmarks (match by URL, update if exists, add if new)
+  const bookmarkMap = new Map();
+  existingBookmarks.forEach(b => bookmarkMap.set(b.url, b));
+  
+  importedBookmarks.forEach(b => {
+    if (bookmarkMap.has(b.url)) {
+      // Update existing bookmark with imported data (but keep existing ID)
+      const existing = bookmarkMap.get(b.url);
+      Object.assign(existing, b);
+      existing.id = bookmarkMap.get(b.url).id; // Keep original ID
+    } else {
+      // Add new bookmark
+      bookmarkMap.set(b.url, b);
+    }
+  });
+  
+  const mergedBookmarks = Array.from(bookmarkMap.values());
+  
+  // Merge tags (deduplicate)
+  const tagSet = new Set([...existingTags, ...importedTags]);
+  const mergedTags = Array.from(tagSet);
+  
+  // Merge settings (keep existing API key if import doesn't have one)
+  const mergedSettings = {
+    ...existingData.settings,
+    ...(importData.settings || {})
+  };
+  
+  // Only use imported API key if it exists and is not empty
+  if (importData.settings?.openaiApiKey) {
+    mergedSettings.openaiApiKey = importData.settings.openaiApiKey;
+  }
+  
+  // Save merged data
+  await storageManager.saveAllData({
+    bookmarks: mergedBookmarks,
+    tags: mergedTags,
+    settings: mergedSettings,
+    jobLogs: existingData.jobLogs || []
+  });
+  
+  // Merge highlights (add all, IDs will be regenerated)
+  if (importData.highlights && Array.isArray(importData.highlights)) {
+    for (const highlight of importData.highlights) {
+      // Check if highlight already exists (by bookmarkId and text)
+      const existingHighlights = await highlightsManager.getHighlightsForBookmark(highlight.bookmarkId);
+      const exists = existingHighlights.some(h => h.text === highlight.text);
+      
+      if (!exists) {
+        await highlightsManager.saveHighlight(
+          highlight.bookmarkId,
+          highlight.text,
+          highlight.comment || '',
+          highlight.context || ''
+        );
+      }
+    }
+  }
+  
+  // Merge audio files (replace if bookmarkId exists, add if new)
+  if (importData.audioFiles && Array.isArray(importData.audioFiles)) {
+    for (const audioFile of importData.audioFiles) {
+      await audioStorageManager.saveAudio(
+        audioFile.bookmarkId,
+        audioFile.base64Audio,
+        audioFile.mimeType || 'audio/mpeg'
+      );
+    }
+  }
 }
 
 // Handle save tags
@@ -1406,6 +2098,13 @@ async function refreshListenModalIfOpen(bookmarkId) {
     window.currentTTSBookmark.audioUrl = audioUrl;
     const audioPlayer = document.getElementById('audioPlayer');
     audioPlayer.src = audioUrl;
+    
+    // Disable native controls when using offscreen
+    if (window.currentPlayingBookmarkId) {
+      audioPlayer.controls = false;
+      audioPlayer.removeAttribute('controls');
+    }
+    
     playerEl.style.display = 'block';
     generatingEl.style.display = 'none';
     errorEl.style.display = 'none';
@@ -1416,18 +2115,11 @@ async function refreshListenModalIfOpen(bookmarkId) {
       updateBottomAudioPlayerInfo(b);
     }
     
-    // Auto-play if setting is enabled
-    const settings = await storageManager.getSettings();
-    if (settings.autoPlayAudio) {
-      audioPlayer.addEventListener('loadeddata', () => {
-        audioPlayer.play().catch(err => {
-          console.log('Auto-play prevented by browser:', err);
-          // Auto-play was prevented (browser policy), user will need to click play
-        });
-      }, { once: true });
-    }
+    // Don't auto-play - user must click play
+    // Show bottom player so user can control playback
+    showBottomAudioPlayer();
     
-    // Show bottom audio player when audio starts playing
+    // Show bottom audio player when audio starts playing (if user clicks play)
     audioPlayer.addEventListener('play', () => {
       showBottomAudioPlayer();
       updateBottomAudioPlayer();
@@ -1458,12 +2150,10 @@ function closeTTSModal() {
   
   document.getElementById('ttsModal').classList.remove('active');
   // Don't clear currentTTSBookmark if audio is still playing - keep bottom player visible
-  const audioPlayer = document.getElementById('audioPlayer');
-  if (audioPlayer && audioPlayer.src && !audioPlayer.paused) {
-    // Audio is playing, keep the bookmark reference for bottom player
-  } else {
-    window.currentTTSBookmark = null;
-    hideBottomAudioPlayer();
+  // Always keep bottom player visible if audio is loaded/playing
+  // Don't hide it when closing modal - audio continues in background
+  if (window.currentPlayingBookmarkId) {
+    showBottomAudioPlayer();
   }
   updateTTSControls();
   originalMarkdown = null;
@@ -1536,33 +2226,72 @@ async function handleDownloadAudio() {
   }
 }
 
-// Update audio time display
-function updateAudioTime() {
-  const audioPlayer = document.getElementById('audioPlayer');
-  const timeDiv = document.getElementById('audioTime');
-  
-  if (audioPlayer.duration && !isNaN(audioPlayer.duration)) {
-    const current = formatTime(audioPlayer.currentTime);
-    const total = formatTime(audioPlayer.duration);
-    timeDiv.textContent = `${current} / ${total}`;
-  }
-}
+// Update audio time display (removed - using HTML5 audio controls and bottom player only)
+// Removed duplicate time display to avoid confusion
 
 // Update bottom audio player
-function updateBottomAudioPlayer() {
-  const audioPlayer = document.getElementById('audioPlayer');
-  const bottomPlayer = document.getElementById('bottomAudioPlayer');
+async function updateBottomAudioPlayer() {
   const bottomTime = document.getElementById('bottomAudioTime');
   const bottomPlayPauseBtn = document.getElementById('bottomPlayPauseBtn');
   
-  if (!audioPlayer.src || audioPlayer.src === '') {
+  if (!bottomTime || !bottomPlayPauseBtn) {
     return;
   }
   
-  if (audioPlayer.duration && !isNaN(audioPlayer.duration)) {
+  // Try to get state from offscreen first
+  if (window.currentPlayingBookmarkId) {
+    try {
+      const state = await chrome.runtime.sendMessage({
+        type: 'GET_AUDIO_STATE',
+        bookmarkId: window.currentPlayingBookmarkId
+      });
+      
+      if (state && state.success && state.state) {
+        const currentTime = state.state.currentTime !== undefined && !isNaN(state.state.currentTime) ? state.state.currentTime : 0;
+        const duration = state.state.duration !== undefined && !isNaN(state.state.duration) && state.state.duration > 0 ? state.state.duration : 0;
+        
+        // Always show time, even if duration is 0 (will show as 0:00 / --:--)
+        if (duration > 0) {
+          bottomTime.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+        } else {
+          // Try to get duration from local player as fallback
+          const audioPlayer = document.getElementById('audioPlayer');
+          if (audioPlayer && audioPlayer.duration && !isNaN(audioPlayer.duration) && audioPlayer.duration > 0) {
+            bottomTime.textContent = `${formatTime(currentTime)} / ${formatTime(audioPlayer.duration)}`;
+          } else {
+            bottomTime.textContent = `${formatTime(currentTime)} / --:--`;
+          }
+        }
+        
+        // Update play/pause button
+        if (state.state.playing) {
+          bottomPlayPauseBtn.textContent = '⏸';
+          bottomPlayPauseBtn.title = 'Pause';
+        } else {
+          bottomPlayPauseBtn.textContent = '▶';
+          bottomPlayPauseBtn.title = 'Play';
+        }
+        return;
+      }
+    } catch (error) {
+      console.error('Error getting audio state:', error);
+      // Fall through to local player
+    }
+  }
+  
+  // Fallback to local player
+  const audioPlayer = document.getElementById('audioPlayer');
+  if (!audioPlayer.src || audioPlayer.src === '') {
+    bottomTime.textContent = '0:00 / 0:00';
+    return;
+  }
+  
+  if (audioPlayer.duration && !isNaN(audioPlayer.duration) && audioPlayer.duration > 0) {
     const current = formatTime(audioPlayer.currentTime);
     const total = formatTime(audioPlayer.duration);
     bottomTime.textContent = `${current} / ${total}`;
+  } else {
+    bottomTime.textContent = `${formatTime(audioPlayer.currentTime)} / --:--`;
   }
   
   // Update play/pause button
@@ -1572,6 +2301,300 @@ function updateBottomAudioPlayer() {
   } else {
     bottomPlayPauseBtn.textContent = '⏸';
     bottomPlayPauseBtn.title = 'Pause';
+  }
+}
+
+// Update modal audio controls
+async function updateModalAudioControls() {
+  const modalPlayPauseBtn = document.getElementById('modalPlayPauseBtn');
+  const modalStopBtn = document.getElementById('modalStopBtn');
+  const modalAudioTime = document.getElementById('modalAudioTime');
+  
+  if (!modalPlayPauseBtn) return;
+  
+  if (window.currentPlayingBookmarkId) {
+    try {
+      const stateResponse = await chrome.runtime.sendMessage({
+        type: 'GET_AUDIO_STATE',
+        bookmarkId: window.currentPlayingBookmarkId
+      });
+      
+      if (stateResponse && stateResponse.success && stateResponse.state) {
+        const state = stateResponse.state;
+        const isPlaying = state.playing;
+        
+        // Update play/pause button
+        if (isPlaying) {
+          modalPlayPauseBtn.textContent = '⏸ Pause';
+          modalPlayPauseBtn.classList.remove('btn-primary');
+          modalPlayPauseBtn.classList.add('btn-secondary');
+        } else {
+          modalPlayPauseBtn.textContent = '▶ Play';
+          modalPlayPauseBtn.classList.remove('btn-secondary');
+          modalPlayPauseBtn.classList.add('btn-primary');
+        }
+        
+        // Update stop button state
+        if (modalStopBtn) {
+          if (isPlaying || state.currentTime > 0) {
+            modalStopBtn.disabled = false;
+            modalStopBtn.style.opacity = '1';
+          } else {
+            modalStopBtn.disabled = false;
+            modalStopBtn.style.opacity = '1';
+          }
+        }
+        
+        // Update time display - always show current time and duration
+        if (modalAudioTime) {
+          const currentTime = state.currentTime !== undefined && !isNaN(state.currentTime) ? state.currentTime : 0;
+          const duration = state.duration !== undefined && !isNaN(state.duration) && state.duration > 0 ? state.duration : 0;
+          
+          if (duration > 0) {
+            modalAudioTime.textContent = `${formatTime(currentTime)} / ${formatTime(duration)}`;
+          } else {
+            // Try to get duration from local player as fallback
+            const audioPlayer = document.getElementById('audioPlayer');
+            if (audioPlayer && audioPlayer.duration && !isNaN(audioPlayer.duration) && audioPlayer.duration > 0) {
+              modalAudioTime.textContent = `${formatTime(currentTime)} / ${formatTime(audioPlayer.duration)}`;
+            } else {
+              modalAudioTime.textContent = `${formatTime(currentTime)} / --:--`;
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error updating modal audio controls:', error);
+      // Fallback to local player
+      const audioPlayer = document.getElementById('audioPlayer');
+      if (audioPlayer && audioPlayer.src) {
+        if (modalAudioTime && audioPlayer.duration && !isNaN(audioPlayer.duration)) {
+          modalAudioTime.textContent = `${formatTime(audioPlayer.currentTime)} / ${formatTime(audioPlayer.duration)}`;
+        }
+        if (modalPlayPauseBtn) {
+          if (audioPlayer.paused) {
+            modalPlayPauseBtn.textContent = '▶ Play';
+            modalPlayPauseBtn.classList.remove('btn-secondary');
+            modalPlayPauseBtn.classList.add('btn-primary');
+          } else {
+            modalPlayPauseBtn.textContent = '⏸ Pause';
+            modalPlayPauseBtn.classList.remove('btn-primary');
+            modalPlayPauseBtn.classList.add('btn-secondary');
+          }
+        }
+      }
+    }
+  } else {
+    // No audio loaded
+    modalPlayPauseBtn.textContent = '▶ Play';
+    modalPlayPauseBtn.classList.remove('btn-secondary');
+    modalPlayPauseBtn.classList.add('btn-primary');
+    if (modalStopBtn) {
+      modalStopBtn.disabled = false;
+      modalStopBtn.style.opacity = '1';
+    }
+    if (modalAudioTime) {
+      modalAudioTime.textContent = '0:00 / 0:00';
+    }
+  }
+}
+
+// Update UI from offscreen audio state
+function updateAudioUIFromOffscreen(msg) {
+  if (msg.bookmarkId === window.currentPlayingBookmarkId) {
+    // Always show bottom player when audio is loaded (playing or paused)
+    showBottomAudioPlayer();
+    
+    // Update bottom player
+    updateBottomAudioPlayer();
+    
+    // Update modal controls (including time)
+    updateModalAudioControls();
+    
+    // Update main player if modal is open
+    if (window.currentTTSBookmark && window.currentTTSBookmark.id === msg.bookmarkId) {
+      const audioPlayer = document.getElementById('audioPlayer');
+      if (audioPlayer && msg.currentTime !== undefined) {
+        // Sync local player time for UI (but don't play it)
+        if (Math.abs(audioPlayer.currentTime - msg.currentTime) > 1) {
+          audioPlayer.currentTime = msg.currentTime;
+        }
+      }
+    }
+  } else if (msg.bookmarkId) {
+    // Audio is playing for a different bookmark - update our tracking
+    window.currentPlayingBookmarkId = msg.bookmarkId;
+    storageManager.getBookmarks().then(bookmarks => {
+      const bookmark = bookmarks.find(b => b.id === msg.bookmarkId);
+      if (bookmark) {
+        updateBottomAudioPlayerInfo(bookmark);
+      }
+    });
+    showBottomAudioPlayer();
+    updateBottomAudioPlayer();
+    updateModalAudioControls();
+  }
+}
+
+// Load audio in offscreen document (without playing)
+async function loadAudioInOffscreen(bookmarkId, audioData, mimeType, title, forceLoad = false) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: 'LOAD_AUDIO',
+      bookmarkId: bookmarkId,
+      audioData: audioData,
+      mimeType: mimeType,
+      title: title,
+      forceLoad: forceLoad
+    });
+    
+    if (!response || !response.success) {
+      throw new Error(response?.error || 'Failed to load audio in offscreen');
+    }
+  } catch (error) {
+    console.error('Error loading audio in offscreen:', error);
+    throw error;
+  }
+}
+
+// Play audio in offscreen document (when user clicks play)
+async function playAudioInOffscreen(bookmarkId) {
+  try {
+    console.log('Attempting to play audio in offscreen for bookmark:', bookmarkId);
+    
+    // STEP 1: Stop current audio if different article is playing
+    if (window.currentPlayingBookmarkId && window.currentPlayingBookmarkId !== bookmarkId) {
+      try {
+        const stopResponse = await chrome.runtime.sendMessage({
+          type: 'AUDIO_STOP',
+          bookmarkId: window.currentPlayingBookmarkId
+        });
+        console.log('Stopped previous audio:', window.currentPlayingBookmarkId, stopResponse);
+        // Wait a bit for stop to complete and cleanup
+        await new Promise(resolve => setTimeout(resolve, 150));
+      } catch (error) {
+        console.error('Error stopping previous audio:', error);
+      }
+    }
+    
+    // STEP 2: Check if audio is already loaded for this bookmark
+    let currentState = null;
+    try {
+      currentState = await chrome.runtime.sendMessage({
+        type: 'GET_AUDIO_STATE'
+      });
+    } catch (error) {
+      console.error('Error getting audio state:', error);
+    }
+    
+    // STEP 3: If audio is not loaded for this bookmark, load it first
+    // This can happen if user opened article while different audio was playing
+    const needsLoad = !currentState || !currentState.success || !currentState.state || 
+        currentState.state.bookmarkId !== bookmarkId;
+    
+    if (needsLoad) {
+      console.log('Audio not loaded for bookmark, loading now:', bookmarkId);
+      // Need to load audio first - get it from storage
+      const bookmarks = await storageManager.getBookmarks();
+      const bookmark = bookmarks.find(b => b.id === bookmarkId);
+      if (bookmark) {
+        let audioData = null;
+        let mimeType = bookmark.audioMimeType || 'audio/mpeg';
+        
+        if (bookmark.audioStored) {
+          try {
+            const audio = await audioStorageManager.getAudio(bookmarkId);
+            if (audio) {
+              audioData = audio.base64Audio;
+              mimeType = audio.mimeType || 'audio/mpeg';
+            }
+          } catch (error) {
+            if (bookmark.audioData) {
+              audioData = bookmark.audioData;
+            }
+          }
+        } else if (bookmark.audioData) {
+          audioData = bookmark.audioData;
+        }
+        
+        if (audioData) {
+          // Load audio with forceLoad=true (now that previous is stopped, this will work)
+          console.log('Loading audio for bookmark:', bookmarkId);
+          await loadAudioInOffscreen(bookmarkId, audioData, mimeType, bookmark.title, true);
+          // Wait a bit for audio to be ready
+          await new Promise(resolve => setTimeout(resolve, 300));
+          
+          // Verify it's loaded
+          const verifyState = await chrome.runtime.sendMessage({
+            type: 'GET_AUDIO_STATE'
+          });
+          if (verifyState && verifyState.success && verifyState.state && 
+              verifyState.state.bookmarkId === bookmarkId) {
+            console.log('Audio successfully loaded for bookmark:', bookmarkId);
+          } else {
+            console.warn('Audio may not be loaded correctly');
+          }
+        } else {
+          throw new Error('No audio data found for bookmark');
+        }
+      } else {
+        throw new Error('Bookmark not found');
+      }
+    } else {
+      console.log('Audio already loaded for bookmark:', bookmarkId);
+    }
+    
+    // STEP 4: Now play the audio
+    console.log('Resuming/playing audio for bookmark:', bookmarkId);
+    const response = await chrome.runtime.sendMessage({
+      type: 'AUDIO_RESUME',
+      bookmarkId: bookmarkId
+    });
+    
+    if (!response || !response.success) {
+      const errorMsg = response?.error || 'Failed to play audio in offscreen';
+      console.error('Offscreen play failed:', errorMsg);
+      throw new Error(errorMsg);
+    }
+    
+    // Update current playing bookmark ID
+    window.currentPlayingBookmarkId = bookmarkId;
+    
+    // Update bottom player info
+    storageManager.getBookmarks().then(bookmarks => {
+      const bookmark = bookmarks.find(b => b.id === bookmarkId);
+      if (bookmark) {
+        updateBottomAudioPlayerInfo(bookmark);
+      }
+    });
+    
+    // Ensure bottom player is visible
+    showBottomAudioPlayer();
+    
+    console.log('Audio play command sent successfully to offscreen');
+    
+    // Verify it's actually playing after a short delay
+    setTimeout(async () => {
+      try {
+        const stateResponse = await chrome.runtime.sendMessage({
+          type: 'GET_AUDIO_STATE',
+          bookmarkId: bookmarkId
+        });
+        if (stateResponse && stateResponse.success && stateResponse.state) {
+          if (stateResponse.state.playing) {
+            console.log('Verified: Audio is playing in offscreen');
+          } else {
+            console.warn('Warning: Audio play command sent but audio is not playing');
+          }
+        }
+      } catch (err) {
+        console.error('Error verifying audio state:', err);
+      }
+    }, 500);
+    
+  } catch (error) {
+    console.error('Error playing audio in offscreen:', error);
+    throw error;
   }
 }
 
@@ -1587,22 +2610,53 @@ function updateBottomAudioPlayerInfo(bookmark) {
   }
 }
 
-// Show bottom audio player
+// Show bottom audio player - always show if there's any audio loaded/playing
 function showBottomAudioPlayer() {
-  const audioPlayer = document.getElementById('audioPlayer');
   const bottomPlayer = document.getElementById('bottomAudioPlayer');
   
-  if (!audioPlayer || !bottomPlayer) {
+  if (!bottomPlayer) {
+    console.error('Bottom audio player element not found');
     return;
   }
   
-  if (audioPlayer.src && audioPlayer.src !== '') {
-    // Update info if we have current bookmark
-    if (window.currentTTSBookmark) {
-      updateBottomAudioPlayerInfo(window.currentTTSBookmark);
-    }
+  // Always check offscreen state first
+  const hasOffscreenAudio = window.currentPlayingBookmarkId !== null;
+  
+  // Show if we have a playing bookmark ID (from offscreen)
+  if (hasOffscreenAudio) {
+    // Update info from bookmark ID
+    storageManager.getBookmarks().then(bookmarks => {
+      const bookmark = bookmarks.find(b => b.id === window.currentPlayingBookmarkId);
+      if (bookmark) {
+        updateBottomAudioPlayerInfo(bookmark);
+      }
+    });
+    
     bottomPlayer.style.display = 'flex';
+    bottomPlayer.style.visibility = 'visible';
+    bottomPlayer.style.opacity = '1';
     updateBottomAudioPlayer();
+    console.log('Bottom audio player shown for bookmark:', window.currentPlayingBookmarkId);
+  } else {
+    // Check if there's any audio playing in offscreen (even if we don't have the ID)
+    chrome.runtime.sendMessage({ type: 'GET_AUDIO_STATE' }).then(stateResponse => {
+      if (stateResponse && stateResponse.success && stateResponse.state && stateResponse.state.bookmarkId) {
+        window.currentPlayingBookmarkId = stateResponse.state.bookmarkId;
+        storageManager.getBookmarks().then(bookmarks => {
+          const bookmark = bookmarks.find(b => b.id === window.currentPlayingBookmarkId);
+          if (bookmark) {
+            updateBottomAudioPlayerInfo(bookmark);
+          }
+        });
+        bottomPlayer.style.display = 'flex';
+        bottomPlayer.style.visibility = 'visible';
+        bottomPlayer.style.opacity = '1';
+        updateBottomAudioPlayer();
+        console.log('Bottom audio player shown from offscreen state');
+      }
+    }).catch(() => {
+      // No audio playing
+    });
   }
 }
 
@@ -1613,35 +2667,108 @@ function hideBottomAudioPlayer() {
 }
 
 // Toggle play/pause from bottom player
-function toggleBottomAudioPlayPause() {
-  const audioPlayer = document.getElementById('audioPlayer');
-  
-  if (!audioPlayer.src || audioPlayer.src === '') {
-    // If no audio in main player, try to open the last bookmark
+async function toggleBottomAudioPlayPause() {
+  if (!window.currentPlayingBookmarkId) {
+    // If no audio playing, try to open the last bookmark
     if (window.currentTTSBookmark) {
       handleListen(window.currentTTSBookmark.id);
     }
     return;
   }
   
-  if (audioPlayer.paused) {
-    audioPlayer.play().catch(err => {
-      console.error('Error playing audio:', err);
+  try {
+    // Get current state from offscreen
+    const stateResponse = await chrome.runtime.sendMessage({
+      type: 'GET_AUDIO_STATE',
+      bookmarkId: window.currentPlayingBookmarkId
     });
-  } else {
-    audioPlayer.pause();
+    
+    if (stateResponse && stateResponse.success && stateResponse.state) {
+      const isPlaying = stateResponse.state.playing;
+      
+      if (isPlaying) {
+        // Currently playing - pause it
+        const pauseResponse = await chrome.runtime.sendMessage({
+          type: 'AUDIO_PAUSE',
+          bookmarkId: window.currentPlayingBookmarkId
+        });
+        if (pauseResponse && !pauseResponse.success) {
+          console.error('Failed to pause audio:', pauseResponse.error);
+        } else {
+          console.log('Audio paused successfully');
+        }
+      } else {
+        // Not playing - resume/play it
+        const resumeResponse = await chrome.runtime.sendMessage({
+          type: 'AUDIO_RESUME',
+          bookmarkId: window.currentPlayingBookmarkId
+        });
+        if (resumeResponse && !resumeResponse.success) {
+          console.error('Failed to resume audio:', resumeResponse.error);
+        } else {
+          console.log('Audio resumed/started successfully');
+        }
+      }
+    } else {
+      // No valid state returned, try to resume anyway (audio might be loaded but not playing)
+      console.log('No state returned, attempting to resume audio');
+      const resumeResponse = await chrome.runtime.sendMessage({
+        type: 'AUDIO_RESUME',
+        bookmarkId: window.currentPlayingBookmarkId
+      });
+      if (resumeResponse && !resumeResponse.success) {
+        console.error('Failed to resume audio:', resumeResponse.error);
+      } else {
+        console.log('Audio started successfully (no previous state)');
+      }
+    }
+  } catch (error) {
+    console.error('Error toggling audio:', error);
+    // Fallback to local player if offscreen fails
+    const audioPlayer = document.getElementById('audioPlayer');
+    if (audioPlayer && audioPlayer.src) {
+      // Re-enable controls for fallback
+      audioPlayer.controls = true;
+      if (audioPlayer.paused) {
+        audioPlayer.play().catch(err => console.error('Error playing audio:', err));
+      } else {
+        audioPlayer.pause();
+      }
+    }
   }
   
-  updateBottomAudioPlayer();
+  // Update UI after a short delay to allow state to update
+  setTimeout(() => {
+    updateBottomAudioPlayer();
+    updateModalAudioControls();
+  }, 200);
 }
 
 // Stop audio from bottom player
-function stopBottomAudio() {
+async function stopBottomAudio() {
+  if (window.currentPlayingBookmarkId) {
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'AUDIO_STOP',
+        bookmarkId: window.currentPlayingBookmarkId
+      });
+    } catch (error) {
+      console.error('Error stopping audio:', error);
+    }
+    window.currentPlayingBookmarkId = null;
+  }
+  
+  // Also stop local player
   const audioPlayer = document.getElementById('audioPlayer');
-  audioPlayer.pause();
-  audioPlayer.currentTime = 0;
+  if (audioPlayer) {
+    audioPlayer.pause();
+    audioPlayer.currentTime = 0;
+  }
+  
+  // Hide bottom player only when explicitly stopped by user
   hideBottomAudioPlayer();
   updateBottomAudioPlayer();
+  updateModalAudioControls();
 }
 
 // Format time (seconds to MM:SS)

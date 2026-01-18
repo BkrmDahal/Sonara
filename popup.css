@@ -266,7 +266,7 @@ body {
   background: #ffffff;
   min-height: 0;
   -webkit-overflow-scrolling: touch;
-  padding-bottom: 48px; /* Space for bottom audio player */
+  padding-bottom: 64px; /* Space for bottom audio player */
 }
 
 .bookmarks-list {
@@ -638,7 +638,7 @@ body {
 }
 
 .modal-header {
-  padding: 24px;
+  padding: 12px 20px;
   border-bottom: 1px solid #e5e7eb;
   display: flex;
   justify-content: space-between;
@@ -676,7 +676,7 @@ body {
 }
 
 .modal-header h2 {
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 600;
   color: #111827;
   letter-spacing: -0.5px;
@@ -705,14 +705,14 @@ body {
 }
 
 .modal-body {
-  padding: 24px;
+  padding: 16px 20px;
   overflow-y: auto;
   flex: 1;
 }
 
 /* Form */
 .form-group {
-  margin-bottom: 20px;
+  margin-bottom: 16px;
 }
 
 .form-group label {
@@ -762,6 +762,70 @@ body {
   gap: 12px;
   justify-content: flex-end;
   margin-top: 24px;
+}
+
+/* Settings Tabs */
+.settings-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  margin-top: 0;
+  border-bottom: 1px solid #e5e7eb;
+  padding-bottom: 0;
+}
+
+.settings-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 16px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #6b7280;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-family: inherit;
+}
+
+.settings-tab:hover {
+  color: #111827;
+  background: #f9fafb;
+}
+
+.settings-tab.active {
+  color: #3b82f6;
+  border-bottom-color: #3b82f6;
+  background: transparent;
+}
+
+.settings-tab svg {
+  width: 16px;
+  height: 16px;
+  stroke: currentColor;
+}
+
+.settings-tab-content {
+  display: none;
+}
+
+.settings-tab-content.active {
+  display: block;
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* Export/Import checkbox labels */
+.settings-tab-content label[style*="cursor: pointer"] {
+  transition: all 0.2s;
+}
+
+.settings-tab-content label[style*="cursor: pointer"]:hover {
+  border-color: #d1d5db !important;
+  background: #f9fafb !important;
 }
 
 /* Tag Suggestions */
@@ -1408,15 +1472,84 @@ body {
 
 .audio-info-compact {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  flex-direction: column;
+  gap: 12px;
   font-size: 12px;
-  gap: 8px;
+}
+
+.audio-controls-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #e5e7eb;
+  margin-bottom: 8px;
+}
+
+.audio-controls-inline .btn {
+  min-width: 80px;
+  font-weight: 500;
+}
+
+.audio-controls-inline .btn-primary {
+  background: #111827;
+  color: #ffffff;
+  border: 1px solid #111827;
+}
+
+.audio-controls-inline .btn-primary:hover {
+  background: #1f2937;
+  border-color: #1f2937;
+}
+
+.audio-controls-inline .btn-secondary {
+  background: #ffffff;
+  color: #374151;
+  border: 1px solid #d1d5db;
+}
+
+.audio-controls-inline .btn-secondary:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.audio-time-display {
+  font-size: 13px;
+  color: #6b7280;
+  font-weight: 500;
+  margin-left: auto;
+  padding: 0 8px;
+  font-variant-numeric: tabular-nums;
 }
 
 .audio-actions-compact {
   display: flex;
-  gap: 6px;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.audio-actions-compact .btn {
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 1px solid #d1d5db;
+  background: #ffffff;
+  color: #374151;
+}
+
+.audio-actions-compact .btn:hover {
+  background: #f9fafb;
+  border-color: #9ca3af;
+}
+
+.audio-actions-compact .btn-archive {
+  background: #fef3c7;
+  color: #92400e;
+  border-color: #fde68a;
+}
+
+.audio-actions-compact .btn-archive:hover {
+  background: #fde68a;
+  border-color: #fbbf24;
 }
 
 .audio-info {
@@ -1463,23 +1596,24 @@ body {
 
 /* Bottom Audio Player */
 .bottom-audio-player {
-  position: absolute;
+  position: fixed;
   bottom: 0;
   left: 0;
   right: 0;
   width: 100%;
   background: #ffffff;
   border-top: 2px solid #e5e7eb;
-  padding: 6px 12px;
+  padding: 8px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
   box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.08);
-  z-index: 100;
+  z-index: 10000;
   flex-shrink: 0;
-  height: 48px;
-  max-height: 48px;
+  height: 56px;
+  max-height: 56px;
+  visibility: visible;
 }
 
 .bottom-audio-info {
