@@ -8,17 +8,13 @@ class AudioStorageManager {
     this.dbName = 'SonaraAudioDB';
     this.dbVersion = 1;
     this.storeName = 'audioFiles';
-    this.db = null;
   }
 
   /**
-   * Initialize IndexedDB
+   * Get a fresh database connection
+   * Always returns a new connection to avoid stale connection issues
    */
-  async init() {
-    if (this.db) {
-      return this.db;
-    }
-
+  async getDB() {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
@@ -28,8 +24,7 @@ class AudioStorageManager {
       };
 
       request.onsuccess = () => {
-        this.db = request.result;
-        resolve(this.db);
+        resolve(request.result);
       };
 
       request.onupgradeneeded = (event) => {
@@ -43,6 +38,13 @@ class AudioStorageManager {
   }
 
   /**
+   * Initialize IndexedDB (for backwards compatibility)
+   */
+  async init() {
+    return this.getDB();
+  }
+
+  /**
    * Save audio data to IndexedDB
    * @param {string} bookmarkId - The bookmark ID
    * @param {string} base64Audio - Base64 encoded audio data
@@ -50,9 +52,9 @@ class AudioStorageManager {
    */
   async saveAudio(bookmarkId, base64Audio, mimeType = 'audio/mpeg') {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       const audioData = {
@@ -86,9 +88,9 @@ class AudioStorageManager {
    */
   async getAudio(bookmarkId) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readonly');
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {
@@ -121,9 +123,9 @@ class AudioStorageManager {
    */
   async deleteAudio(bookmarkId) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {

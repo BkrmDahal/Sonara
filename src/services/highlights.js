@@ -8,19 +8,15 @@ class HighlightsManager {
     this.dbName = 'SonaraHighlightsDB';
     this.dbVersion = 1;
     this.storeName = 'highlights';
-    this.db = null;
     this.currentSelection = null;
     this.currentBookmarkId = null;
   }
 
   /**
-   * Initialize IndexedDB for highlights
+   * Get a fresh database connection
+   * Always returns a new connection to avoid stale connection issues
    */
-  async init() {
-    if (this.db) {
-      return this.db;
-    }
-
+  async getDB() {
     return new Promise((resolve, reject) => {
       const request = indexedDB.open(this.dbName, this.dbVersion);
 
@@ -30,8 +26,7 @@ class HighlightsManager {
       };
 
       request.onsuccess = () => {
-        this.db = request.result;
-        resolve(this.db);
+        resolve(request.result);
       };
 
       request.onupgradeneeded = (event) => {
@@ -46,6 +41,13 @@ class HighlightsManager {
   }
 
   /**
+   * Initialize IndexedDB for highlights (for backwards compatibility)
+   */
+  async init() {
+    return this.getDB();
+  }
+
+  /**
    * Save a highlight
    * @param {string} bookmarkId - The bookmark ID
    * @param {string} text - The highlighted text
@@ -55,9 +57,9 @@ class HighlightsManager {
    */
   async saveHighlight(bookmarkId, text, comment = '', context = '') {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       const highlight = {
@@ -93,9 +95,9 @@ class HighlightsManager {
    */
   async getHighlightsForBookmark(bookmarkId) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readonly');
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
       const index = store.index('bookmarkId');
       
@@ -123,9 +125,9 @@ class HighlightsManager {
    */
   async getAllHighlights() {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readonly');
+      const transaction = db.transaction([this.storeName], 'readonly');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {
@@ -152,7 +154,7 @@ class HighlightsManager {
    */
   async deleteHighlight(highlightId) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
       // Ensure ID is a number (IndexedDB auto-increment IDs are numbers)
       const id = typeof highlightId === 'string' ? parseInt(highlightId, 10) : Number(highlightId);
@@ -161,7 +163,7 @@ class HighlightsManager {
         throw new Error(`Invalid highlight ID: ${highlightId}`);
       }
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {
@@ -187,9 +189,9 @@ class HighlightsManager {
    */
   async deleteHighlightsForBookmark(bookmarkId) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       const index = store.index('bookmarkId');
       
@@ -241,9 +243,9 @@ class HighlightsManager {
    */
   async updateHighlightComment(highlightId, comment) {
     try {
-      await this.init();
+      const db = await this.getDB();
       
-      const transaction = this.db.transaction([this.storeName], 'readwrite');
+      const transaction = db.transaction([this.storeName], 'readwrite');
       const store = transaction.objectStore(this.storeName);
       
       return new Promise((resolve, reject) => {
