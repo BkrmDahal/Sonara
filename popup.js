@@ -6,7 +6,7 @@
 let currentBookmarks = [];
 let allTags = [];
 let currentBookmark = null;
-let pendingDeleteBookmarkId = null;
+// pendingDeleteBookmarkId is declared in src/popup/views/modals.js
 let originalMarkdown = null;
 let isEditMode = false;
 
@@ -787,8 +787,15 @@ function loadTagSuggestions() {
   }
   
   suggestions.innerHTML = allTags.map(tag => 
-    `<span class="tag-suggestion" onclick="addTagSuggestion('${escapeHtml(tag)}')">${escapeHtml(tag)}</span>`
+    `<span class="tag-suggestion" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`
   ).join('');
+  
+  // Add click handlers for tag suggestions
+  suggestions.querySelectorAll('.tag-suggestion').forEach(el => {
+    el.addEventListener('click', () => {
+      addTagSuggestion(el.dataset.tag);
+    });
+  });
 }
 
 // Add tag suggestion
@@ -812,8 +819,14 @@ async function handleSaveBookmark() {
   currentBookmark.tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
   
   const settings = await storageManager.getSettings();
-  const canGenerate = !!(settings.openaiApiKey && settings.openaiApiKey.trim() &&
-      currentBookmark.extractedContent && currentBookmark.extractedContent.trim());
+  const hasApiKey = !!(settings.openaiApiKey && settings.openaiApiKey.trim());
+  const hasContent = !!(currentBookmark.extractedContent && currentBookmark.extractedContent.trim());
+  const canGenerate = hasApiKey && hasContent;
+  
+  console.log('[Sonara] Save bookmark - API key configured:', hasApiKey, 
+    '| Has content:', hasContent, 
+    '| Content length:', (currentBookmark.extractedContent || '').length,
+    '| Can generate audio:', canGenerate);
   
   if (canGenerate) {
     currentBookmark.audioStatus = 'generating';
@@ -822,14 +835,24 @@ async function handleSaveBookmark() {
   const savedBookmark = await storageManager.saveBookmark(currentBookmark);
   const bookmarkId = savedBookmark.id;
   
+  console.log('[Sonara] Bookmark saved with ID:', bookmarkId);
+  
   await loadBookmarks();
   await loadTags();
   closeBookmarkModal();
   
   if (canGenerate && bookmarkId) {
-    chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId }).catch((err) => {
-      console.error('Failed to send audio generation message:', err);
+    console.log('[Sonara] Sending GENERATE_AUDIO message for bookmark:', bookmarkId);
+    // Use callback-based API to avoid Promise hanging issues with service workers
+    chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[Sonara] Failed to send audio generation message:', chrome.runtime.lastError.message);
+      } else {
+        console.log('[Sonara] GENERATE_AUDIO response:', response);
+      }
     });
+  } else {
+    console.log('[Sonara] Skipping audio generation - canGenerate:', canGenerate, '| bookmarkId:', bookmarkId);
   }
 }
 
@@ -1774,8 +1797,15 @@ function loadEditTagSuggestions() {
   }
   
   suggestions.innerHTML = availableTags.map(tag => 
-    `<span class="tag-suggestion" onclick="addEditTagSuggestion('${escapeHtml(tag)}')">${escapeHtml(tag)}</span>`
+    `<span class="tag-suggestion" data-tag="${escapeHtml(tag)}">${escapeHtml(tag)}</span>`
   ).join('');
+  
+  // Add click handlers for tag suggestions
+  suggestions.querySelectorAll('.tag-suggestion').forEach(el => {
+    el.addEventListener('click', () => {
+      addEditTagSuggestion(el.dataset.tag);
+    });
+  });
 }
 
 // Add tag suggestion to edit input

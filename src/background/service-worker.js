@@ -3,8 +3,87 @@
  * Handles background audio generation and extension lifecycle
  */
 
-// Import audio storage manager
-importScripts('audio-storage.js');
+console.log('[Sonara SW] Service worker starting...');
+
+/**
+ * Audio Storage Manager - Inline definition for service worker
+ * Uses IndexedDB to store large audio files
+ */
+class AudioStorageManager {
+  constructor() {
+    this.dbName = 'SonaraAudioDB';
+    this.dbVersion = 1;
+    this.storeName = 'audioFiles';
+  }
+
+  async getDB() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(this.dbName, this.dbVersion);
+      request.onerror = () => reject(request.error);
+      request.onsuccess = () => resolve(request.result);
+      request.onupgradeneeded = (event) => {
+        const db = event.target.result;
+        if (!db.objectStoreNames.contains(this.storeName)) {
+          const objectStore = db.createObjectStore(this.storeName, { keyPath: 'bookmarkId' });
+          objectStore.createIndex('bookmarkId', 'bookmarkId', { unique: true });
+        }
+      };
+    });
+  }
+
+  async saveAudio(bookmarkId, base64Audio, mimeType = 'audio/mpeg') {
+    const db = await this.getDB();
+    const transaction = db.transaction([this.storeName], 'readwrite');
+    const store = transaction.objectStore(this.storeName);
+    
+    return new Promise((resolve, reject) => {
+      const request = store.put({
+        bookmarkId,
+        base64Audio,
+        mimeType,
+        savedAt: Date.now()
+      });
+      request.onsuccess = () => {
+        console.log(`[Sonara SW] Audio saved to IndexedDB for bookmark ${bookmarkId}`);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async getAudio(bookmarkId) {
+    const db = await this.getDB();
+    const transaction = db.transaction([this.storeName], 'readonly');
+    const store = transaction.objectStore(this.storeName);
+    
+    return new Promise((resolve, reject) => {
+      const request = store.get(bookmarkId);
+      request.onsuccess = () => {
+        const result = request.result;
+        resolve(result ? { base64Audio: result.base64Audio, mimeType: result.mimeType || 'audio/mpeg' } : null);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  async deleteAudio(bookmarkId) {
+    const db = await this.getDB();
+    const transaction = db.transaction([this.storeName], 'readwrite');
+    const store = transaction.objectStore(this.storeName);
+    
+    return new Promise((resolve, reject) => {
+      const request = store.delete(bookmarkId);
+      request.onsuccess = () => {
+        console.log(`[Sonara SW] Audio deleted from IndexedDB for bookmark ${bookmarkId}`);
+        resolve();
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+}
+
+const audioStorageManager = new AudioStorageManager();
+console.log('[Sonara SW] AudioStorageManager initialized');
 
 const STORAGE_KEY = 'sonara_data';
 const OPENAI_SPEECH_URL = 'https://api.openai.com/v1/audio/speech';
@@ -39,8 +118,10 @@ async function saveJobLog(bookmarkId, bookmarkTitle, status, message, details = 
 }
 
 chrome.runtime.onInstalled.addListener(() => {
-  // Extension installed
+  console.log('[Sonara SW] Extension installed/updated');
 });
+
+console.log('[Sonara SW] Registering message listeners...');
 
 // Manage offscreen document for background audio playback
 let offscreenDocumentId = null;
@@ -407,6 +488,17 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral', bookmarkId =
 const activeGenerations = new Map();
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Log ALL messages received by this listener for debugging
+  console.log('[Sonara SW] Message listener received:', msg?.type || 'unknown');
+  
+  // Only handle GENERATE_AUDIO and CANCEL_AUDIO_GENERATION messages
+  // Other messages are handled by the first listener
+  if (msg.type !== 'GENERATE_AUDIO' && msg.type !== 'CANCEL_AUDIO_GENERATION') {
+    return false; // Let other listeners handle
+  }
+  
+  console.log('[Sonara SW] Processing message:', msg.type, 'bookmarkId:', msg.bookmarkId);
+  
   // Handle cancel request
   if (msg.type === 'CANCEL_AUDIO_GENERATION' && msg.bookmarkId) {
     const bookmarkId = msg.bookmarkId;
@@ -420,252 +512,266 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   
   if (msg.type !== 'GENERATE_AUDIO' || !msg.bookmarkId) {
+    console.log('[Sonara SW] Invalid GENERATE_AUDIO message - missing bookmarkId');
     sendResponse({ ok: false, error: 'Invalid message' });
     return false;
   }
 
   const bookmarkId = msg.bookmarkId;
-  let responded = false;
+  
+  console.log('[Sonara SW] Starting audio generation for bookmark:', bookmarkId);
   
   // Mark generation as active
   activeGenerations.set(bookmarkId, { cancelled: false });
+  
+  // Run generation and respond when done (keeps service worker alive)
+  generateAudioForBookmark(bookmarkId)
+    .then(() => {
+      console.log('[Sonara SW] Audio generation completed for:', bookmarkId);
+      sendResponse({ ok: true, completed: true, bookmarkId });
+    })
+    .catch(err => {
+      console.error('[Sonara SW] Audio generation error:', err);
+      sendResponse({ ok: false, error: err.message, bookmarkId });
+    });
+  
+  return true; // Keep channel open for async response
+});
 
-  const respond = (result) => {
-    if (!responded) {
-      responded = true;
-      sendResponse(result);
+/**
+ * Generate audio for a bookmark (runs in background)
+ */
+async function generateAudioForBookmark(bookmarkId) {
+  const startTime = Date.now();
+  let bookmarkTitle = 'Unknown';
+  
+  try {
+    const data = await getData();
+    console.log('[Sonara SW] Loaded data, bookmarks count:', (data.bookmarks || []).length);
+    const idx = (data.bookmarks || []).findIndex(b => b.id === bookmarkId);
+    if (idx < 0) {
+      console.log('[Sonara SW] Bookmark not found:', bookmarkId);
+      await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Bookmark not found');
+      return;
     }
-  };
+    const b = data.bookmarks[idx];
+    bookmarkTitle = b.title || 'Untitled';
+    const text = (b.extractedContent || '').trim();
+    const apiKey = (data.settings?.openaiApiKey || '').trim();
+    const voice = data.settings?.openaiVoice || 'coral';
 
-  (async () => {
-    const startTime = Date.now();
-    let bookmarkTitle = 'Unknown';
+    console.log('[Sonara SW] Found bookmark:', bookmarkTitle, 
+      '| Text length:', text.length, 
+      '| API key configured:', !!apiKey,
+      '| Voice:', voice);
+
+    // Log start
+    await saveJobLog(bookmarkId, bookmarkTitle, 'started', 'Audio generation started', {
+      textLength: text.length,
+      voice: voice
+    });
+
+    if (!text || !apiKey) {
+      console.log('[Sonara SW] Missing content or API key - text:', !!text, '| apiKey:', !!apiKey);
+      delete b.audioStatus;
+      data.bookmarks[idx] = b;
+      await setData(data);
+      await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Missing content or API key');
+      return;
+    }
+
+    // Increased timeout for longer articles: 10 minutes (was 5 minutes)
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Audio generation timeout (10 minutes). Article may be too long.')), 10 * 60 * 1000)
+    );
+
+    // Progress callback for detailed logging
+    let lastLoggedProgress = 0;
+    let chunkMetadata = { totalChunks: 0, completedChunks: 0 };
+    
+    const progressCallback = async (progress) => {
+      const { totalChunks, completedChunks, currentChunk, progressPercent, status, message } = progress;
+      chunkMetadata = { totalChunks, completedChunks };
+      
+      // Log every 10% progress or on status changes or every chunk for small jobs
+      const shouldLog = progressPercent - lastLoggedProgress >= 10 || 
+                       status !== 'completed' || 
+                       currentChunk === totalChunks ||
+                       totalChunks <= 5; // Log every chunk for small jobs (5 or fewer chunks)
+      
+      if (shouldLog) {
+        const logMessage = message || 
+          `Chunk ${currentChunk}/${totalChunks} - ${completedChunks} completed (${progressPercent}%)`;
+        
+        await saveJobLog(bookmarkId, bookmarkTitle, 'progress', logMessage, {
+          totalChunks,
+          completedChunks,
+          currentChunk,
+          progressPercent,
+          status,
+          currentChunkChars: progress.currentChunkChars,
+          currentChunkSize: progress.currentChunkSize,
+          currentChunkDuration: progress.currentChunkDuration,
+          totalChars: progress.totalChars,
+          totalBytesReceived: progress.totalBytesReceived
+        });
+        
+        lastLoggedProgress = progressPercent;
+      }
+    };
+    
+    const base64 = await Promise.race([
+      openaiTTSInBackground(text, apiKey, voice, bookmarkId, progressCallback).then(async (result) => {
+        await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 
+          `All ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks generated, combining and saving...`, {
+          totalChunks: chunkMetadata.totalChunks,
+          completedChunks: chunkMetadata.completedChunks,
+          chunksProcessed: chunkMetadata.completedChunks,
+          chunksTotal: chunkMetadata.totalChunks
+        });
+        return result;
+      }),
+      timeoutPromise
+    ]);
+
+    // Save audio to IndexedDB instead of chrome.storage to avoid quota issues
+    try {
+      await audioStorageManager.saveAudio(bookmarkId, base64, 'audio/mpeg');
+      // Store a flag indicating audio is in IndexedDB, not the actual data
+      b.audioStored = true; // Flag to indicate audio is stored in IndexedDB
+      b.audioMimeType = 'audio/mpeg';
+      // Remove old audioData if it exists (migration)
+      delete b.audioData;
+    } catch (storageError) {
+      console.error('Failed to save audio to IndexedDB:', storageError);
+      // Fallback: try to save to chrome.storage if IndexedDB fails (for smaller files)
+      // But warn about potential quota issues
+      if (base64.length < 5 * 1024 * 1024) { // Only if less than 5MB
+        b.audioData = base64;
+        b.audioMimeType = 'audio/mpeg';
+        console.warn('Falling back to chrome.storage for audio (may hit quota limits)');
+      } else {
+        throw new Error('Audio file too large for chrome.storage. IndexedDB storage failed: ' + storageError.message);
+      }
+    }
+
+    delete b.audioStatus;
+    delete b.audioError;
+    data.bookmarks[idx] = b;
+    await setData(data);
+
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    const audioSize = base64.length;
+    
+    await saveJobLog(bookmarkId, bookmarkTitle, 'success', 
+      `Audio generation completed successfully in ${duration}s - ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks`, {
+      duration: duration,
+      totalChunks: chunkMetadata.totalChunks,
+      completedChunks: chunkMetadata.completedChunks,
+      audioSize: audioSize,
+      audioSizeMB: (audioSize / (1024 * 1024)).toFixed(2),
+      chunksProcessed: chunkMetadata.completedChunks,
+      chunksTotal: chunkMetadata.totalChunks
+    });
+
+    console.log(`[Sonara SW] Audio generation successful for bookmark ${bookmarkId}`);
+    activeGenerations.delete(bookmarkId);
+    try { 
+      chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
+    } catch (_) {}
+    
+  } catch (e) {
+    // Clean up on error or cancellation
+    activeGenerations.delete(bookmarkId);
+    const errorMessage = String(e.message || 'Unknown error');
+    const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('QUOTA') || 
+                        errorMessage.includes('Resource::kQuotaBytes');
+    const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('Timeout');
+    const isCancelled = errorMessage.includes('cancelled') || errorMessage.includes('Cancelled');
+    
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    
+    // Try to get chunk progress from error details if available
+    let errorDetails = {
+      duration: duration,
+      isQuotaError,
+      isTimeout,
+      isCancelled
+    };
+    
+    // Extract chunk info from error message if available
+    const chunkMatch = errorMessage.match(/chunk (\d+)\/(\d+)/i);
+    if (chunkMatch) {
+      errorDetails.failedAtChunk = parseInt(chunkMatch[1]);
+      errorDetails.totalChunks = parseInt(chunkMatch[2]);
+      errorDetails.completedChunks = parseInt(chunkMatch[1]) - 1;
+    }
+    
+    // Log error with detailed info
+    await saveJobLog(bookmarkId, bookmarkTitle, isCancelled ? 'cancelled' : 'error', 
+      isCancelled ? 'Audio generation cancelled by user' : errorMessage, {
+      ...errorDetails,
+      stack: e.stack
+    });
+    
+    console.error('[Sonara SW] Background audio generation failed:', {
+      bookmarkId,
+      error: errorMessage,
+      isQuotaError,
+      stack: e.stack,
+      timestamp: new Date().toISOString()
+    });
+    
+    // If it's a quota error, provide a more helpful message
+    let userFriendlyError = errorMessage;
+    if (isQuotaError) {
+      userFriendlyError = 'Storage quota exceeded. Audio file is too large. Please try with a shorter article or free up storage space.';
+    }
     
     try {
       const data = await getData();
-      const idx = (data.bookmarks || []).findIndex(b => b.id === bookmarkId);
-      if (idx < 0) {
-        await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Bookmark not found');
-        respond({ ok: false, error: 'Bookmark not found' });
-        return;
-      }
-      const b = data.bookmarks[idx];
-      bookmarkTitle = b.title || 'Untitled';
-      const text = (b.extractedContent || '').trim();
-      const apiKey = (data.settings?.openaiApiKey || '').trim();
-      const voice = data.settings?.openaiVoice || 'coral';
-
-      // Log start
-      await saveJobLog(bookmarkId, bookmarkTitle, 'started', 'Audio generation started', {
-        textLength: text.length,
-        voice: voice
-      });
-
-      if (!text || !apiKey) {
-        delete b.audioStatus;
-        data.bookmarks[idx] = b;
+      const idx = (data.bookmarks || []).findIndex(x => x.id === bookmarkId);
+      if (idx >= 0) {
+        // Store error status instead of just deleting audioStatus
+        data.bookmarks[idx].audioStatus = 'error';
+        data.bookmarks[idx].audioError = userFriendlyError;
+        data.bookmarks[idx].audioErrorTime = Date.now(); // Track when error occurred for auto-reprocess
         await setData(data);
-        await saveJobLog(bookmarkId, bookmarkTitle, 'error', 'Missing content or API key');
-        respond({ ok: false, error: 'Missing content or API key' });
-        return;
-      }
-
-      // Increased timeout for longer articles: 10 minutes (was 5 minutes)
-      const timeoutPromise = new Promise((_, reject) => 
-        setTimeout(() => reject(new Error('Audio generation timeout (10 minutes). Article may be too long.')), 10 * 60 * 1000)
-      );
-
-      // Progress callback for detailed logging
-      let lastLoggedProgress = 0;
-      let chunkMetadata = { totalChunks: 0, completedChunks: 0 };
-      
-      const progressCallback = async (progress) => {
-        const { totalChunks, completedChunks, currentChunk, progressPercent, status, message } = progress;
-        chunkMetadata = { totalChunks, completedChunks };
+        console.log(`[Sonara SW] Error status saved for bookmark ${bookmarkId}: ${userFriendlyError}`);
         
-        // Log every 10% progress or on status changes or every chunk for small jobs
-        const shouldLog = progressPercent - lastLoggedProgress >= 10 || 
-                         status !== 'completed' || 
-                         currentChunk === totalChunks ||
-                         totalChunks <= 5; // Log every chunk for small jobs (5 or fewer chunks)
-        
-        if (shouldLog) {
-          const logMessage = message || 
-            `Chunk ${currentChunk}/${totalChunks} - ${completedChunks} completed (${progressPercent}%)`;
-          
-          await saveJobLog(bookmarkId, bookmarkTitle, 'progress', logMessage, {
-            totalChunks,
-            completedChunks,
-            currentChunk,
-            progressPercent,
-            status,
-            currentChunkChars: progress.currentChunkChars,
-            currentChunkSize: progress.currentChunkSize,
-            currentChunkDuration: progress.currentChunkDuration,
-            totalChars: progress.totalChars,
-            totalBytesReceived: progress.totalBytesReceived
-          });
-          
-          lastLoggedProgress = progressPercent;
-        }
-      };
-      
-      const base64 = await Promise.race([
-        openaiTTSInBackground(text, apiKey, voice, bookmarkId, progressCallback).then(async (result) => {
-          await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 
-            `All ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks generated, combining and saving...`, {
-            totalChunks: chunkMetadata.totalChunks,
-            completedChunks: chunkMetadata.completedChunks,
-            chunksProcessed: chunkMetadata.completedChunks,
-            chunksTotal: chunkMetadata.totalChunks
-          });
-          return result;
-        }),
-        timeoutPromise
-      ]);
-
-      // Save audio to IndexedDB instead of chrome.storage to avoid quota issues
-      try {
-        await audioStorageManager.saveAudio(bookmarkId, base64, 'audio/mpeg');
-        // Store a flag indicating audio is in IndexedDB, not the actual data
-        b.audioStored = true; // Flag to indicate audio is stored in IndexedDB
-        b.audioMimeType = 'audio/mpeg';
-        // Remove old audioData if it exists (migration)
-        delete b.audioData;
-      } catch (storageError) {
-        console.error('Failed to save audio to IndexedDB:', storageError);
-        // Fallback: try to save to chrome.storage if IndexedDB fails (for smaller files)
-        // But warn about potential quota issues
-        if (base64.length < 5 * 1024 * 1024) { // Only if less than 5MB
-          b.audioData = base64;
-          b.audioMimeType = 'audio/mpeg';
-          console.warn('Falling back to chrome.storage for audio (may hit quota limits)');
-        } else {
-          throw new Error('Audio file too large for chrome.storage. IndexedDB storage failed: ' + storageError.message);
-        }
-      }
-
-      delete b.audioStatus;
-      delete b.audioError;
-      data.bookmarks[idx] = b;
-      await setData(data);
-
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      const audioSize = base64.length;
-      
-      await saveJobLog(bookmarkId, bookmarkTitle, 'success', 
-        `Audio generation completed successfully in ${duration}s - ${chunkMetadata.completedChunks}/${chunkMetadata.totalChunks} chunks`, {
-        duration: duration,
-        totalChunks: chunkMetadata.totalChunks,
-        completedChunks: chunkMetadata.completedChunks,
-        audioSize: audioSize,
-        audioSizeMB: (audioSize / (1024 * 1024)).toFixed(2),
-        chunksProcessed: chunkMetadata.completedChunks,
-        chunksTotal: chunkMetadata.totalChunks
-      });
-
-      console.log(`Audio generation successful for bookmark ${bookmarkId}`);
-      activeGenerations.delete(bookmarkId);
-      try { 
-        chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
-      } catch (_) {}
-      
-      respond({ ok: true });
-    } catch (e) {
-      // Clean up on error or cancellation
-      activeGenerations.delete(bookmarkId);
-      const errorMessage = String(e.message || 'Unknown error');
-      const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('QUOTA') || 
-                          errorMessage.includes('Resource::kQuotaBytes');
-      const isTimeout = errorMessage.includes('timeout') || errorMessage.includes('Timeout');
-      const isCancelled = errorMessage.includes('cancelled') || errorMessage.includes('Cancelled');
-      
-      const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-      
-      // Try to get chunk progress from error details if available
-      let errorDetails = {
-        duration: duration,
-        isQuotaError,
-        isTimeout,
-        isCancelled
-      };
-      
-      // Extract chunk info from error message if available
-      const chunkMatch = errorMessage.match(/chunk (\d+)\/(\d+)/i);
-      if (chunkMatch) {
-        errorDetails.failedAtChunk = parseInt(chunkMatch[1]);
-        errorDetails.totalChunks = parseInt(chunkMatch[2]);
-        errorDetails.completedChunks = parseInt(chunkMatch[1]) - 1;
-      }
-      
-      // Log error with detailed info
-      await saveJobLog(bookmarkId, bookmarkTitle, isCancelled ? 'cancelled' : 'error', 
-        isCancelled ? 'Audio generation cancelled by user' : errorMessage, {
-        ...errorDetails,
-        stack: e.stack
-      });
-      
-      console.error('Background audio generation failed:', {
-        bookmarkId,
-        error: errorMessage,
-        isQuotaError,
-        stack: e.stack,
-        timestamp: new Date().toISOString()
-      });
-      
-      // If it's a quota error, provide a more helpful message
-      let userFriendlyError = errorMessage;
-      if (isQuotaError) {
-        userFriendlyError = 'Storage quota exceeded. Audio file is too large. Please try with a shorter article or free up storage space.';
-      }
-      
-      try {
-        const data = await getData();
-        const idx = (data.bookmarks || []).findIndex(x => x.id === bookmarkId);
-        if (idx >= 0) {
-          // Store error status instead of just deleting audioStatus
-          data.bookmarks[idx].audioStatus = 'error';
-          data.bookmarks[idx].audioError = userFriendlyError;
-          data.bookmarks[idx].audioErrorTime = Date.now(); // Track when error occurred for auto-reprocess
-          await setData(data);
-          console.log(`Error status saved for bookmark ${bookmarkId}: ${userFriendlyError}`);
-          
-          // Auto-reprocess after 10 minutes if it was a timeout error
-          if (isTimeout && !isCancelled) {
-            setTimeout(async () => {
-              try {
-                const checkData = await getData();
-                const checkIdx = checkData.bookmarks.findIndex(x => x.id === bookmarkId);
-                if (checkIdx >= 0 && checkData.bookmarks[checkIdx].audioStatus === 'error') {
-                  const errorTime = checkData.bookmarks[checkIdx].audioErrorTime || 0;
-                  // Only auto-reprocess if error is still present and it's been 10 minutes
-                  if (Date.now() - errorTime >= 10 * 60 * 1000) {
-                    await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 'Auto-reprocessing after timeout...');
-                    checkData.bookmarks[checkIdx].audioStatus = 'generating';
-                    delete checkData.bookmarks[checkIdx].audioError;
-                    delete checkData.bookmarks[checkIdx].audioErrorTime;
-                    await setData(checkData);
-                    // Trigger regeneration
-                    chrome.runtime.sendMessage({ type: 'GENERATE_AUDIO', bookmarkId }).catch(() => {});
-                  }
+        // Auto-reprocess after 10 minutes if it was a timeout error
+        if (isTimeout && !isCancelled) {
+          setTimeout(async () => {
+            try {
+              const checkData = await getData();
+              const checkIdx = checkData.bookmarks.findIndex(x => x.id === bookmarkId);
+              if (checkIdx >= 0 && checkData.bookmarks[checkIdx].audioStatus === 'error') {
+                const errorTime = checkData.bookmarks[checkIdx].audioErrorTime || 0;
+                // Only auto-reprocess if error is still present and it's been 10 minutes
+                if (Date.now() - errorTime >= 10 * 60 * 1000) {
+                  await saveJobLog(bookmarkId, bookmarkTitle, 'progress', 'Auto-reprocessing after timeout...');
+                  checkData.bookmarks[checkIdx].audioStatus = 'generating';
+                  delete checkData.bookmarks[checkIdx].audioError;
+                  delete checkData.bookmarks[checkIdx].audioErrorTime;
+                  await setData(checkData);
+                  // Trigger regeneration
+                  generateAudioForBookmark(bookmarkId).catch(() => {});
                 }
-              } catch (err) {
-                console.error('Auto-reprocess failed:', err);
               }
-            }, 10 * 60 * 1000); // 10 minutes
-          }
+            } catch (err) {
+              console.error('[Sonara SW] Auto-reprocess failed:', err);
+            }
+          }, 10 * 60 * 1000); // 10 minutes
         }
-      } catch (err) {
-        console.error('Failed to save error status:', err);
       }
-      
-      try { 
-        chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
-      } catch (_) {}
-      
-      respond({ ok: false, error: errorMessage });
+    } catch (err) {
+      console.error('[Sonara SW] Failed to save error status:', err);
     }
-  })();
+    
+    try { 
+      chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
+    } catch (_) {}
+  }
+}
 
-  return true;
-});
+console.log('[Sonara SW] Service worker fully loaded and ready');
