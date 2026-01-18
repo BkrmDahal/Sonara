@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.1.1] - 2026-01-18
+
+### Improved
+- **Audio Player UI**: Redesigned audio controls with icons for Play, Pause, and Stop buttons
+- **Minimalistic Action Buttons**: Download, Reprocess, and Archive buttons now use clean SVG icons with tooltips
+- **Dynamic Modal Title**: Listen modal now displays the article title instead of generic "Listen to Article"
+- **Responsive Header Layout**: Title truncates gracefully for long article names while keeping search and close button visible
+
+### Fixed
+- **Audio Playback**: Fixed issue requiring double-click to start audio playback
+- **Bottom Player State**: Bottom audio player no longer changes when clicking "listen" on a different article
+- **Offscreen Document**: Fixed message passing errors between popup and offscreen audio player
+- **Audio Loading**: Improved audio buffering - waits for `canplay` event before enabling playback
+
+### Technical
+- Added `setPlayPauseButtonState` helper for consistent button state management
+- Implemented retry loop for reliable audio playback start
+- Fixed parameter mismatch in offscreen message handler
+- Improved flexbox layout for modal header with proper overflow handling
+
 ## [1.1.0] - 2026-01-17
 
 ### Added
