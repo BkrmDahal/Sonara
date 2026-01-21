@@ -77,6 +77,12 @@ async function updateBottomAudioPlayer() {
       if (durationEl) {
         durationEl.textContent = formatTime(state.duration || 0);
       }
+      
+      // Sync playback speed display if different
+      if (state.playbackRate && state.playbackRate !== currentPlaybackSpeed) {
+        currentPlaybackSpeed = state.playbackRate;
+        updateSpeedButtonsDisplay();
+      }
     }
   } catch (error) {
     // Ignore if offscreen not available
@@ -293,6 +299,18 @@ async function playAudioInOffscreen(bookmarkId) {
       window.currentPlayingBookmarkId = bookmarkId;
       showBottomAudioPlayer();
       updateBottomAudioPlayerInfo(bookmark);
+      
+      // Apply saved playback speed
+      if (currentPlaybackSpeed !== 1) {
+        try {
+          await chrome.runtime.sendMessage({
+            type: 'AUDIO_SET_RATE',
+            rate: currentPlaybackSpeed
+          });
+        } catch (e) {
+          // Ignore if setting rate fails
+        }
+      }
     }
     
     return response;
@@ -335,5 +353,185 @@ function updateAudioUIFromOffscreen(msg) {
   
   // Update modal controls if open
   updateModalAudioControls();
+}
+
+/**
+ * Available playback speeds
+ */
+const PLAYBACK_SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+
+/**
+ * Current playback speed (default 1x)
+ */
+let currentPlaybackSpeed = 1;
+
+/**
+ * Initialize speed controls for audio players
+ */
+function initSpeedControls() {
+  const bottomSpeedBtn = document.getElementById('bottomSpeedBtn');
+  const modalSpeedBtn = document.getElementById('modalSpeedBtn');
+  
+  // Load saved speed from settings
+  loadPlaybackSpeed();
+  
+  // Setup bottom player speed control
+  if (bottomSpeedBtn) {
+    setupSpeedButton(bottomSpeedBtn, 'bottom');
+  }
+  
+  // Setup modal player speed control
+  if (modalSpeedBtn) {
+    setupSpeedButton(modalSpeedBtn, 'modal');
+  }
+  
+  // Close speed menus when clicking outside
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.bottom-speed-control') && !e.target.closest('.modal-speed-control')) {
+      closeAllSpeedMenus();
+    }
+  });
+}
+
+/**
+ * Setup a speed button with dropdown menu
+ */
+function setupSpeedButton(button, prefix) {
+  // Create speed menu
+  const menu = document.createElement('div');
+  menu.className = 'speed-menu';
+  menu.id = `${prefix}SpeedMenu`;
+  
+  PLAYBACK_SPEEDS.forEach(speed => {
+    const option = document.createElement('button');
+    option.className = 'speed-option' + (speed === currentPlaybackSpeed ? ' active' : '');
+    option.textContent = speed === 1 ? '1x' : `${speed}x`;
+    option.dataset.speed = speed;
+    option.addEventListener('click', (e) => {
+      e.stopPropagation();
+      setPlaybackSpeed(speed);
+      closeAllSpeedMenus();
+    });
+    menu.appendChild(option);
+  });
+  
+  button.parentElement.appendChild(menu);
+  
+  // Toggle menu on button click
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const isOpen = menu.classList.contains('active');
+    closeAllSpeedMenus();
+    if (!isOpen) {
+      menu.classList.add('active');
+    }
+  });
+}
+
+/**
+ * Close all speed menus
+ */
+function closeAllSpeedMenus() {
+  document.querySelectorAll('.speed-menu').forEach(menu => {
+    menu.classList.remove('active');
+  });
+}
+
+/**
+ * Set playback speed
+ */
+async function setPlaybackSpeed(speed) {
+  currentPlaybackSpeed = speed;
+  
+  // Update all speed buttons
+  const bottomSpeedBtn = document.getElementById('bottomSpeedBtn');
+  const modalSpeedBtn = document.getElementById('modalSpeedBtn');
+  
+  const displayText = speed === 1 ? '1x' : `${speed}x`;
+  
+  if (bottomSpeedBtn) {
+    bottomSpeedBtn.textContent = displayText;
+  }
+  if (modalSpeedBtn) {
+    modalSpeedBtn.textContent = displayText;
+  }
+  
+  // Update active state in menus
+  document.querySelectorAll('.speed-option').forEach(option => {
+    option.classList.toggle('active', parseFloat(option.dataset.speed) === speed);
+  });
+  
+  // Send to offscreen player
+  try {
+    await chrome.runtime.sendMessage({
+      type: 'AUDIO_SET_RATE',
+      rate: speed
+    });
+  } catch (error) {
+    console.log('Could not set playback rate:', error.message);
+  }
+  
+  // Save to settings
+  savePlaybackSpeed(speed);
+}
+
+/**
+ * Load playback speed from settings
+ */
+async function loadPlaybackSpeed() {
+  try {
+    const settings = await storageManager.getSettings();
+    if (settings.playbackSpeed) {
+      currentPlaybackSpeed = settings.playbackSpeed;
+      updateSpeedButtonsDisplay();
+      
+      // Apply to offscreen player if audio is loaded
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'AUDIO_SET_RATE',
+          rate: currentPlaybackSpeed
+        });
+      } catch (e) {
+        // Ignore if offscreen not available
+      }
+    }
+  } catch (error) {
+    console.log('Could not load playback speed:', error.message);
+  }
+}
+
+/**
+ * Save playback speed to settings
+ */
+async function savePlaybackSpeed(speed) {
+  try {
+    const settings = await storageManager.getSettings();
+    settings.playbackSpeed = speed;
+    await storageManager.saveSettings(settings);
+  } catch (error) {
+    console.log('Could not save playback speed:', error.message);
+  }
+}
+
+/**
+ * Update speed buttons to show current speed
+ */
+function updateSpeedButtonsDisplay() {
+  const displayText = currentPlaybackSpeed === 1 ? '1x' : `${currentPlaybackSpeed}x`;
+  
+  const bottomSpeedBtn = document.getElementById('bottomSpeedBtn');
+  const modalSpeedBtn = document.getElementById('modalSpeedBtn');
+  
+  if (bottomSpeedBtn) {
+    bottomSpeedBtn.textContent = displayText;
+  }
+  if (modalSpeedBtn) {
+    modalSpeedBtn.textContent = displayText;
+  }
+  
+  // Update active state in menus
+  document.querySelectorAll('.speed-option').forEach(option => {
+    option.classList.toggle('active', parseFloat(option.dataset.speed) === currentPlaybackSpeed);
+  });
 }
 

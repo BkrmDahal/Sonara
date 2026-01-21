@@ -361,6 +361,11 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral', bookmarkId =
       
       console.log(`Processing chunk ${currentChunk}/${totalChunks} (${chunkChars} chars, ${progressPercent}% complete)...`);
       
+      // Keep-alive ping before starting chunk (prevents SW termination during API call)
+      try {
+        await chrome.runtime.getPlatformInfo();
+      } catch (_) {}
+      
       // Log chunk start
       if (progressCallback) {
         await progressCallback({
@@ -445,6 +450,11 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral', bookmarkId =
       
       // Small delay between chunks to avoid rate limiting
       if (i < chunks.length - 1) {
+        // Keep-alive ping between chunks (critical for long articles)
+        try {
+          await chrome.runtime.getPlatformInfo();
+        } catch (_) {}
+        
         await new Promise(r => setTimeout(r, 300));
       }
     } catch (e) {
@@ -486,6 +496,101 @@ async function openaiTTSInBackground(text, apiKey, voice = 'coral', bookmarkId =
 
 // Track active audio generation tasks for cancellation
 const activeGenerations = new Map();
+
+/**
+ * Keep-alive mechanism for long-running tasks
+ * Chrome service workers can be terminated after 30s of inactivity.
+ * This uses multiple techniques to keep the SW alive:
+ * 1. Chrome alarms API (most reliable - wakes SW if terminated)
+ * 2. Periodic chrome.runtime API calls (extends SW lifetime)
+ * 3. Self-messaging (triggers message listener)
+ * 4. chrome.storage access (I/O keeps SW active)
+ */
+let keepAliveInterval = null;
+let keepAliveCounter = 0;
+const KEEP_ALIVE_ALARM = 'sonara-keep-alive';
+
+async function startKeepAlive() {
+  if (keepAliveInterval) return;
+  
+  console.log('[Sonara SW] Starting keep-alive mechanism');
+  keepAliveCounter = 0;
+  
+  // Create a periodic alarm as backup (wakes SW if it gets terminated)
+  // Minimum alarm period is 1 minute, but it still helps as a backup
+  try {
+    await chrome.alarms.create(KEEP_ALIVE_ALARM, {
+      periodInMinutes: 0.5 // 30 seconds (Chrome will enforce minimum)
+    });
+    console.log('[Sonara SW] Keep-alive alarm created');
+  } catch (e) {
+    console.log('[Sonara SW] Alarm creation error (non-fatal):', e.message);
+  }
+  
+  // Use multiple techniques every 20 seconds to ensure SW stays alive
+  keepAliveInterval = setInterval(async () => {
+    keepAliveCounter++;
+    
+    try {
+      // Technique 1: chrome.runtime.getPlatformInfo() - guaranteed to extend lifetime
+      await chrome.runtime.getPlatformInfo();
+      
+      // Technique 2: Touch storage (I/O operation)
+      await chrome.storage.local.get(['_keepalive']);
+      
+      // Technique 3: Self-message
+      chrome.runtime.sendMessage({ type: 'KEEP_ALIVE_PING', counter: keepAliveCounter }).catch(() => {});
+      
+      console.log(`[Sonara SW] Keep-alive ping #${keepAliveCounter}`);
+    } catch (e) {
+      console.log('[Sonara SW] Keep-alive error (non-fatal):', e.message);
+    }
+  }, 20000); // Every 20 seconds (well under 30s limit)
+  
+  // Also do an immediate ping
+  chrome.runtime.getPlatformInfo().catch(() => {});
+}
+
+async function stopKeepAlive() {
+  if (keepAliveInterval) {
+    console.log(`[Sonara SW] Stopping keep-alive mechanism after ${keepAliveCounter} pings`);
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+    keepAliveCounter = 0;
+  }
+  
+  // Clear the alarm
+  try {
+    await chrome.alarms.clear(KEEP_ALIVE_ALARM);
+  } catch (e) {
+    // Ignore
+  }
+}
+
+// Handle alarm events (wakes SW if terminated)
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === KEEP_ALIVE_ALARM) {
+    console.log('[Sonara SW] Keep-alive alarm triggered');
+    
+    // Check if we have any active generations that need to continue
+    if (activeGenerations.size > 0) {
+      console.log(`[Sonara SW] ${activeGenerations.size} active generation(s) running`);
+      // Extend lifetime
+      chrome.runtime.getPlatformInfo().catch(() => {});
+    } else {
+      // No active generations, clear the alarm
+      chrome.alarms.clear(KEEP_ALIVE_ALARM).catch(() => {});
+    }
+  }
+});
+
+// Handle keep-alive ping (just acknowledge it)
+chrome.runtime.onMessage.addListener((msg) => {
+  if (msg.type === 'KEEP_ALIVE_PING') {
+    // Just acknowledging the message keeps the SW alive
+    return false;
+  }
+});
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // Log ALL messages received by this listener for debugging
@@ -544,6 +649,9 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function generateAudioForBookmark(bookmarkId) {
   const startTime = Date.now();
   let bookmarkTitle = 'Unknown';
+  
+  // Start keep-alive to prevent service worker termination
+  await startKeepAlive();
   
   try {
     const data = await getData();
@@ -676,6 +784,12 @@ async function generateAudioForBookmark(bookmarkId) {
 
     console.log(`[Sonara SW] Audio generation successful for bookmark ${bookmarkId}`);
     activeGenerations.delete(bookmarkId);
+    
+    // Stop keep-alive if no more active generations
+    if (activeGenerations.size === 0) {
+      await stopKeepAlive();
+    }
+    
     try { 
       chrome.runtime.sendMessage({ type: 'AUDIO_READY', bookmarkId }).catch(() => {}); 
     } catch (_) {}
@@ -683,6 +797,11 @@ async function generateAudioForBookmark(bookmarkId) {
   } catch (e) {
     // Clean up on error or cancellation
     activeGenerations.delete(bookmarkId);
+    
+    // Stop keep-alive if no more active generations
+    if (activeGenerations.size === 0) {
+      await stopKeepAlive();
+    }
     const errorMessage = String(e.message || 'Unknown error');
     const isQuotaError = errorMessage.includes('quota') || errorMessage.includes('QUOTA') || 
                         errorMessage.includes('Resource::kQuotaBytes');

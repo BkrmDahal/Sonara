@@ -1700,6 +1700,63 @@ body {
   flex-shrink: 0;
 }
 
+/* Speed control button */
+.speed-btn {
+  min-width: 36px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 8px;
+}
+
+.bottom-speed-control,
+.modal-speed-control {
+  position: relative;
+}
+
+.speed-menu {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  padding: 4px;
+  display: none;
+  z-index: 10001;
+  min-width: 60px;
+  margin-bottom: 4px;
+}
+
+.speed-menu.active {
+  display: block;
+}
+
+.speed-option {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: #374151;
+  cursor: pointer;
+  text-align: center;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.speed-option:hover {
+  background: #f3f4f6;
+}
+
+.speed-option.active {
+  background: #111827;
+  color: #ffffff;
+}
+
 .bottom-audio-controls .btn-icon {
   width: 32px;
   height: 32px;
