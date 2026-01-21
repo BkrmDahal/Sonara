@@ -82,6 +82,7 @@ async function handleMessage(message, sender, sendResponse) {
         break;
         
       case 'SET_PLAYBACK_RATE':
+      case 'AUDIO_SET_RATE':
         setPlaybackRate(message.rate);
         break;
         
@@ -97,6 +98,7 @@ async function handleMessage(message, sender, sendResponse) {
             playing: audioPlayer && !audioPlayer.paused,
             currentTime: audioPlayer ? audioPlayer.currentTime : 0,
             duration: audioPlayer ? audioPlayer.duration : 0,
+            playbackRate: audioPlayer ? audioPlayer.playbackRate : 1,
             bookmarkId: currentBookmarkId,
             title: message.title || null
           }

@@ -37,6 +37,9 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Check if audio is already playing on initialization
   checkAndShowPlayingAudio();
   
+  // Initialize speed controls
+  initSpeedControls();
+  
   // Periodically update UI from offscreen audio (every second when playing)
   setInterval(async () => {
     // Always check for playing audio, even if we don't have currentPlayingBookmarkId

@@ -71,6 +71,9 @@
         <div class="bottom-audio-time" id="bottomAudioTime">0:00 / 0:00</div>
       </div>
       <div class="bottom-audio-controls">
+        <div class="bottom-speed-control">
+          <button id="bottomSpeedBtn" class="btn btn-icon btn-small speed-btn" title="Playback speed">1x</button>
+        </div>
         <button id="bottomPlayPauseBtn" class="btn btn-icon btn-small">⏸</button>
         <button id="bottomStopBtn" class="btn btn-icon btn-small">⏹</button>
       </div>
@@ -307,6 +310,9 @@
                   </svg>
                   <span class="btn-text">Stop</span>
                 </button>
+                <div class="modal-speed-control">
+                  <button type="button" id="modalSpeedBtn" class="btn btn-secondary btn-small speed-btn" title="Playback speed">1x</button>
+                </div>
                 <div class="audio-controls-spacer"></div>
                 <button type="button" id="downloadAudioBtn" class="audio-action-btn" title="Download audio">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
